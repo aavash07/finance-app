@@ -1,0 +1,74 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+.eggs/
+.Python
+*.sqlite3
+
+# Virtualenv
+.venv/
+venv/
+env/
+ENV/
+*.env
+*.env.*
+
+# Django
+db.sqlite3
+media/
+staticfiles/
+static/
+logs/
+*.log
+
+# Migrations (optional if you regenerate often)
+**/migrations/*.py
+!**/migrations/__init__.py
+
+# Tests / Coverage
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+.junit/
+
+# VSCode / IDEs
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.pid
+docker-compose.override.yml
+docker-data/
+*.pid.lock
+
+# External OCR repo (keep submodule reference only)
+external/receipt_ocr/*
+!external/receipt_ocr/.git
+!external/receipt_ocr/.gitignore
+
+# Node (if you add React Native frontend later)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build / Packaging
+build/
+dist/
+*.bak
+*.swp
+*.swo
+
+# Environment keys
+secrets/

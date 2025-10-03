@@ -1,0 +1,36 @@
+### 1) Get server public key (requires auth cookie/session)
+GET http://127.0.0.1:8000/api/v1/crypto/server-public-key
+# Use VS Code's cookie jar or add an Authorization header if you implement DRF TokenAuth.
+
+### 2) Register device public key
+POST http://127.0.0.1:8000/api/v1/device/register
+Content-Type: application/json
+
+{
+  "device_id": "ios-dev-001",
+  "public_key_b64": "REPLACE_WITH_BASE64_VERIFY_KEY"
+}
+
+### 3) Dev-only: insert an encrypted receipt (needs staff auth)
+POST http://127.0.0.1:8000/api/v1/dev/create-receipt
+Content-Type: application/json
+
+{
+  "user_id": 1,
+  "year": 2025,
+  "month": 9,
+  "category": "Food",
+  "body_nonce_b64": "REPLACE",
+  "body_ct_b64": "REPLACE",
+  "body_tag_b64": "REPLACE"
+}
+
+### 4) Delegated decrypt/process with short-lived token
+POST http://127.0.0.1:8000/api/v1/decrypt/process
+Content-Type: application/json
+
+{
+  "token": "REPLACE_WITH_SIGNED_JWT",
+  "dek_wrap_srv": "REPLACE_WITH_BASE64_RSA_WRAP",
+  "targets": [REPLACE_WITH_RECEIPT_ID]
+}
