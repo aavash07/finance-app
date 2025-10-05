@@ -1,3 +1,0 @@
-[submodule "external/receipt_ocr"]
-	path = external/receipt_ocr
-	url = https://github.com/KaustubhMestri/Receipt-Text-Extraction-and-Parsing-Using-OCR
