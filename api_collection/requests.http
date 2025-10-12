@@ -1,36 +1,206 @@
-### 1) Get server public key (requires auth cookie/session)
-GET http://127.0.0.1:8000/api/v1/crypto/server-public-key
-# Use VS Code's cookie jar or add an Authorization header if you implement DRF TokenAuth.
+@base = http://127.0.0.1:8000
+# Basic YWRtaW46dGVzdDEyMw==  (admin:test123)
+@auth = Basic YWRtaW46dGVzdDEyMw==
 
-### 2) Register device public key
-POST http://127.0.0.1:8000/api/v1/device/register
+# ── Fill these three from devtools output ─────────────────────────────────────
+@device_id = ios-dev-001
+@device_pub_b64 = REPLACE_WITH_BASE64_VERIFY_KEY
+@token = REPLACE_WITH_SIGNED_JWT            # EdDSA JWT; scope must include "receipt:ingest" and/or "receipt:decrypt"
+@dek_wrap_srv = REPLACE_WITH_BASE64_RSA_WRAP  # RSA-OAEP-SHA256 wrapping of user's DEK
+# ──────────────────────────────────────────────────────────────────────────────
+@receipt_id = 2
+
+###
+# 0) (Optional) Health poke
+GET {{base}}/admin/login/
+Authorization: {{auth}}
+
+###
+# 1) Get server public key (auth required)
+# Your devtools will typically read this pem too.
+# @name get_pubkey
+GET {{base}}/api/v1/crypto/server-public-key
+Authorization: {{auth}}
+
+###
+# 2) Register device public key (one-time per device per user)
+# @name register_device
+POST {{base}}/api/v1/device/register
+Authorization: {{auth}}
 Content-Type: application/json
 
 {
-  "device_id": "ios-dev-001",
-  "public_key_b64": "REPLACE_WITH_BASE64_VERIFY_KEY"
+  "device_id": "{{device_id}}",
+  "public_key_b64": "{{device_pub_b64}}"
 }
 
-### 3) Dev-only: insert an encrypted receipt (needs staff auth)
-POST http://127.0.0.1:8000/api/v1/dev/create-receipt
+###
+# 3) Ingest a receipt (OCR → encrypt with your DEK)
+# Requires: @token (EdDSA) with "receipt:ingest" scope + @dek_wrap_srv
+# Uses multipart upload with a real file path on YOUR machine.
+# @name ingest_receipt
+POST {{base}}/api/v1/ingest/receipt
+Authorization: {{auth}}
+Content-Type: multipart/form-data; boundary=BOUND
+# Tip: VS Code REST client allows the short form `image=@path` too, but we keep it explicit.
+
+--BOUND
+Content-Disposition: form-data; name="token"
+
+{{token}}
+--BOUND
+Content-Disposition: form-data; name="dek_wrap_srv"
+
+{{dek_wrap_srv}}
+--BOUND
+Content-Disposition: form-data; name="year"
+
+2025
+--BOUND
+Content-Disposition: form-data; name="month"
+
+10
+--BOUND
+Content-Disposition: form-data; name="category"
+
+grocery
+--BOUND
+Content-Disposition: form-data; name="image"; filename="16.jpg"
+Content-Type: image/jpeg
+
+< ./Data/16.jpg
+--BOUND--
+
+> {% client.test("ingest_receipt: capture OK", function() {
+    client.assert(response.status === 200, "Expected 200 from ingest");
+    const body = JSON.parse(response.body);
+    client.global.set("receipt_id", String(body.receipt_id));
+    console.log("Captured receipt_id =", body.receipt_id);
+  });
+%}
+
+###
+# 4) List receipts (lightweight preview from plaintext columns)
+# @name list_receipts
+GET {{base}}/api/v1/receipts
+Authorization: {{auth}}
+
+###
+# 5) Decrypt/process the last ingested receipt using a short-lived token
+# Requires: @token with "receipt:decrypt" scope + the SAME @dek_wrap_srv used for encrypt
+# @name delegated_decrypt
+POST {{base}}/api/v1/decrypt/process
+Authorization: {{auth}}
 Content-Type: application/json
 
 {
-  "user_id": 1,
-  "year": 2025,
-  "month": 9,
-  "category": "Food",
-  "body_nonce_b64": "REPLACE",
-  "body_ct_b64": "REPLACE",
-  "body_tag_b64": "REPLACE"
+  "token": "{{token}}",
+  "dek_wrap_srv": "{{dek_wrap_srv}}",
+  "targets": [ {{receipt_id}} ]
 }
 
-### 4) Delegated decrypt/process with short-lived token
-POST http://127.0.0.1:8000/api/v1/decrypt/process
+> {% client.test("delegated_decrypt: got data", function() {
+    client.assert(response.status === 200, "Expected 200 from decrypt/process");
+    const data = JSON.parse(response.body);
+    client.assert(Array.isArray(data.data) && data.data.length > 0, "Expected at least one decrypted item");
+    console.log("Decrypted JSON:", data.data[0].plaintext_json);
+  });
+%}
+
+###
+# 6) (Optional) Fetch that receipt’s basic info (no decrypt)
+# @name receipt_detail
+GET {{base}}/api/v1/receipts/{{receipt_id}}
+Authorization: {{auth}}
+
+
+###
+# A) DEV: Mint a device + token (auto-registers pubkey)
+# @name dev_mint_token
+POST {{base}}/api/v1/dev/mint-token
+Authorization: {{auth}}
 Content-Type: application/json
 
 {
-  "token": "REPLACE_WITH_SIGNED_JWT",
-  "dek_wrap_srv": "REPLACE_WITH_BASE64_RSA_WRAP",
-  "targets": [REPLACE_WITH_RECEIPT_ID]
+  "device_id": "demo-device-001",
+  "scope": ["receipt:ingest", "receipt:decrypt"],
+  "ttl_seconds": 600
+}
+
+> {% client.test("capture dev token/keys", function() {
+    const j = JSON.parse(response.body);
+    client.global.set("device_id", j.device_id);
+    client.global.set("device_pub_b64", j.device_pub_b64);
+    client.global.set("device_priv_b64", j.device_priv_b64);
+    client.global.set("token", j.token);
+    console.log("Device + token minted. Kid:", j.device_id);
+  }); %}
+
+###
+# B) DEV: Generate a DEK and wrapped blob
+# @name dev_wrap_dek
+POST {{base}}/api/v1/dev/wrap-dek
+Authorization: {{auth}}
+Content-Type: application/json
+
+{}
+
+> {% client.test("capture dek + wrap", function() {
+    const j = JSON.parse(response.body);
+    client.global.set("dek_b64", j.dek_b64);
+    client.global.set("dek_wrap_srv", j.dek_wrap_srv);
+    console.log("Wrapped DEK captured");
+  }); %}
+
+###
+# C) Ingest using ONLY outputs from A + B
+# @name ingest_receipt_demo
+POST {{base}}/api/v1/ingest/receipt
+Authorization: {{auth}}
+Content-Type: multipart/form-data; boundary=BOUND
+
+--BOUND
+Content-Disposition: form-data; name="token"
+
+{{token}}
+--BOUND
+Content-Disposition: form-data; name="dek_wrap_srv"
+
+{{dek_wrap_srv}}
+--BOUND
+Content-Disposition: form-data; name="year"
+
+2025
+--BOUND
+Content-Disposition: form-data; name="month"
+
+10
+--BOUND
+Content-Disposition: form-data; name="category"
+
+grocery
+--BOUND
+Content-Disposition: form-data; name="image"; filename="16.jpg"
+Content-Type: image/jpeg
+
+< ./external/receipt_ocr/Data/16.jpg
+--BOUND--
+
+> {% client.test("capture receipt_id", function() {
+    const j = JSON.parse(response.body);
+    client.global.set("receipt_id", String(j.receipt_id));
+    console.log("Ingested receipt_id =", j.receipt_id);
+  }); %}
+
+###
+# D) Delegated decrypt of that receipt via the same token & DEK wrap
+# @name decrypt_demo
+POST {{base}}/api/v1/decrypt/process
+Authorization: {{auth}}
+Content-Type: application/json
+
+{
+  "token": "{{token}}",
+  "dek_wrap_srv": "{{dek_wrap_srv}}",
+  "targets": [ {{receipt_id}} ]
 }
