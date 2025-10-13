@@ -1,6 +1,7 @@
 from __future__ import annotations
 import re
 from typing import Dict, Any, List, Tuple
+import datetime
 
 # $ or bare 12.34 / 1,234.56
 _MONEY_ANY = re.compile(r"(?<!\S)\$?\s*([-+]?\d{1,3}(?:[,\s]\d{3})*(?:\.\d{2})|\d+\.\d{2})(?!\S)")
@@ -229,16 +230,113 @@ def normalize_text_to_schema(text: str) -> Dict[str, Any]:
     if merchant == "Unknown" and first_candidate:
         merchant = first_candidate
 
+    # Merchant normalization: collapse whitespace/punct and map common aliases.
+    merchant = _normalize_merchant_name(merchant)
+
     total_idx, total_val = _first_total_line_and_value(lines)
     if total_val == 0.0:
         total_val = _best_total_from_text(text or "")
+
+    # Date extraction to ISO (YYYY-MM-DD)
+    date_iso = _extract_best_date_iso(lines)
 
     items = _itemize(text or "", total_idx)
 
     return {
         "merchant": merchant,
-        "date": None,
+        "date": None,  # kept for backward compat; prefer date_str
         "currency": _infer_currency_from_text(text),
         "total": total_val,
         "items": items,
+        "date_str": date_iso or "",
     }
+
+# ----------------------- Helpers: Merchant -------------------------------
+
+_ALIASES = {
+    "walmart supercenter": "Walmart",
+    "walmart": "Walmart",
+    "trader joe's": "Trader Joe's",
+    "trader joes": "Trader Joe's",
+    "trader joe": "Trader Joe's",
+}
+
+def _normalize_merchant_name(name: str) -> str:
+    n = (name or "").strip()
+    if not n:
+        return "Unknown"
+    # collapse whitespace and strip common punctuation/symbols
+    n = re.sub(r"[\s\t\u200b\u00A0]+", " ", n)
+    # normalize apostrophes to ASCII
+    n = n.replace("\u2019", "'").replace("\u2018", "'").replace("\u02BC", "'").replace("\u2032", "'")
+    n = n.strip(" .'\"“”•-–—|:/\\[]{}()<>")
+    low = n.lower()
+    if low in _ALIASES:
+        return _ALIASES[low]
+    # Title-case fallback with safe capitalization
+    def _title_token(t: str) -> str:
+        tl = t.lower()
+        if "'" in tl:
+            parts = tl.split("'")
+            if parts and parts[0]:
+                parts[0] = parts[0].capitalize()
+            return "'".join([parts[0]] + [p.lower() for p in parts[1:]])
+        # capitalize if it contains any alpha
+        return tl.capitalize() if re.search(r"[A-Za-z]", tl) else t
+    return " ".join(_title_token(tok) for tok in n.split())
+
+# ------------------------ Helpers: Date ----------------------------------
+
+def _parse_token_to_date(tok: str) -> datetime.date | None:
+    s = tok.strip().replace("\\", "/")
+    # YYYY-MM-DD or YYYY/MM/DD
+    m = re.match(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$", s)
+    if m:
+        y, mo, d = map(int, m.groups())
+        return _safe_date(y, mo, d)
+    # A/B/YYYY or A-B-YYYY → if A>12, treat as D/M/Y else M/D/Y
+    m = re.match(r"^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$", s)
+    if m:
+        a, b, y = map(int, m.groups())
+        if a > 12:  # D/M/Y
+            return _safe_date(y, b, a)
+        return _safe_date(y, a, b)
+    # A/B/YY → same heuristic; assume 2000-2099
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{2})$", s)
+    if m:
+        a, b, yy = map(int, m.groups())
+        y = 2000 + yy
+        if a > 12:
+            return _safe_date(y, b, a)
+        return _safe_date(y, a, b)
+    return None
+
+def _safe_date(y: int, m: int, d: int) -> datetime.date | None:
+    try:
+        return datetime.date(y, m, d)
+    except Exception:
+        return None
+
+def _extract_best_date_iso(lines: List[str]) -> str | None:
+    if not lines:
+        return None
+    # Search bottom-third preferentially
+    n = len(lines)
+    start = max(0, int(n * 2 / 3))
+    slices = [lines[start:], lines]  # bottom third, then whole
+    for seg in slices:
+        candidates: List[datetime.date] = []
+        for ln in seg:
+            for m in _DATE_ANY.finditer(ln):
+                dt = _parse_token_to_date(m.group(1))
+                if dt:
+                    candidates.append(dt)
+        if candidates:
+            # choose the most recent plausible date not in the future (> today + 1d)
+            today = datetime.date.today() + datetime.timedelta(days=1)
+            candidates = [c for c in candidates if c <= today]
+            if not candidates:
+                continue
+            best = max(candidates)
+            return best.isoformat()
+    return None
