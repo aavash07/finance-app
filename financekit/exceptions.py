@@ -3,6 +3,13 @@ from typing import Optional
 from rest_framework.views import exception_handler as drf_exception_handler
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.exceptions import APIException, Throttled
+
+
+class ReplayDetected(APIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "Replay detected"
+    default_code = "replay_detected"
 
 
 def exception_handler(exc, context) -> Optional[Response]:
@@ -24,7 +31,11 @@ def exception_handler(exc, context) -> Optional[Response]:
     else:
         detail_str = str(detail)
 
-    code = getattr(getattr(exc, "default_code", None), "value", None) or getattr(exc, "default_code", None)
+    # Prefer our friendly alias for throttling
+    if isinstance(exc, Throttled):
+        code = "rate_limited"
+    else:
+        code = getattr(getattr(exc, "default_code", None), "value", None) or getattr(exc, "default_code", None)
     if not code:
         # Map some common status codes to codes
         code = {

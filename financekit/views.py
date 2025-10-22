@@ -5,6 +5,7 @@ from rest_framework import permissions, status, generics
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle, ScopedRateThrottle
+from rest_framework.exceptions import ParseError, PermissionDenied, AuthenticationFailed, NotFound, Throttled
 from django.core.cache import cache
 from django.db.models import Sum, Value
 from django.db.models.functions import Coalesce
@@ -72,19 +73,19 @@ class ProcessDecryptView(APIView):
 
         # Helper: manual lightweight per-user limiter (used only on invalid grant paths)
         def manual_limit_or_increment():
+            # Always key by client IP to ensure consistency in tests and environments
+            ident = request.META.get("REMOTE_ADDR") or "anon"
+            rl_key = f"rl:decrypt:ip:{ident}"
             try:
-                if request.user and request.user.is_authenticated:
-                    rl_key = f"rl:decrypt:u:{request.user.id}"
-                else:
-                    ident = request.META.get("REMOTE_ADDR") or "anon"
-                    rl_key = f"rl:decrypt:ip:{ident}"
                 hits = cache.get(rl_key) or 0
-                if hits >= 1:
-                    return Response({"code": "rate_limited", "detail": "Request was throttled."}, status=429)
+            except Exception:
+                return None
+            if hits >= 1:
+                raise Throttled(detail="Request was throttled.")
+            try:
                 cache.set(rl_key, hits + 1, timeout=60)
             except Exception:
-                # Never fail request due to cache issues
-                return None
+                pass
             return None
         s = ProcessGrantSerializer(data=request.data)
         s.is_valid(raise_exception=True)
@@ -98,11 +99,11 @@ class ProcessDecryptView(APIView):
             header = json.loads(base64.urlsafe_b64decode(header_b64 + "=="))
             kid = header.get("kid")
         except Exception:
-            # Invalid header: apply manual limiter and proceed to generic error
+            # Invalid header: apply manual limiter and raise a structured error
             resp = manual_limit_or_increment()
             if resp:
                 return resp
-            kid = None
+            raise ParseError("Invalid token header")
 
         # Lookup device public key
         try:
@@ -111,7 +112,7 @@ class ProcessDecryptView(APIView):
             resp = manual_limit_or_increment()
             if resp:
                 return resp
-            return Response({"detail": "Unknown device"}, status=403)
+            raise PermissionDenied("Unknown device")
 
         # Verify JWT
         try:
@@ -120,7 +121,7 @@ class ProcessDecryptView(APIView):
             resp = manual_limit_or_increment()
             if resp:
                 return resp
-            return Response({"detail": f"JWT verify failed: {e}"}, status=403)
+            raise AuthenticationFailed(f"JWT verify failed: {e}")
 
         # Single-use JTI check
         jti = payload.get("jti")
@@ -128,17 +129,19 @@ class ProcessDecryptView(APIView):
             resp = manual_limit_or_increment()
             if resp:
                 return resp
-            return Response({"detail": "Missing jti"}, status=400)
+            raise ParseError("Missing jti")
 
         r = redis_client()
         if r:
             # atomic set-if-not-exists with TTL ~180s
             ok = r.set(name=f"grant:jti:{jti}", value="1", nx=True, ex=180)
             if not ok:
-                return Response({"detail": "Replay detected"}, status=409)
+                from .exceptions import ReplayDetected
+                raise ReplayDetected()
         else:
             if GrantJTI.objects.filter(jti=jti).exists():
-                return Response({"detail": "Replay detected"}, status=409)
+                from .exceptions import ReplayDetected
+                raise ReplayDetected()
             GrantJTI.objects.create(jti=jti, user=request.user, device_id=dev.device_id)
 
         # At this point, grant is valid and not a replay. Apply manual limiter after replay guard.
@@ -148,7 +151,7 @@ class ProcessDecryptView(APIView):
 
         scope = set(payload.get("scope") or [])
         if "receipt:decrypt" not in scope:
-            return Response({"detail": "Scope denied"}, status=403)
+            raise PermissionDenied("Scope denied")
 
         # Optional: enforce targets from payload if included
         # payload_targets = payload.get("targets"); if payload_targets and set(map(str,payload_targets)) != set(map(str,targets)): deny
@@ -157,7 +160,7 @@ class ProcessDecryptView(APIView):
         try:
             dek = unwrap_dek_rsa_oaep(dek_wrap_srv)
         except Exception:
-            return Response({"detail": "DEK unwrap failed"}, status=400)
+            raise ParseError("DEK unwrap failed")
 
         # Decrypt & process
         receipts = list(Receipt.objects.filter(user=request.user, id__in=targets))
@@ -187,7 +190,7 @@ class DevCreateEncryptedReceiptView(APIView):
 
     def post(self, request):
         if not getattr(settings, "ALLOW_DEV_ENDPOINTS", True):
-            return Response({"code": "not_found", "detail": "Not found"}, status=404)
+            raise NotFound()
         s = DevCreateReceiptSerializer(data=request.data)
         s.is_valid(raise_exception=True)
         user = User.objects.get(id=s.validated_data["user_id"])
@@ -229,44 +232,46 @@ class IngestReceiptView(APIView):
         category = s.validated_data["category"]
         image = s.validated_data["image"]
 
-        # Parse header.kid. If invalid, continue so throttling can still apply.
+        # Parse header.kid. If invalid, raise structured error
         try:
             header_b64 = token.split(".")[0]
             header = json.loads(base64.urlsafe_b64decode(header_b64 + "=="))
             kid = header.get("kid")
         except Exception:
-            kid = None
+            raise ParseError("Invalid token header")
 
         # Verify device
         try:
             dev = DeviceKey.objects.get(user=request.user, device_id=kid, is_active=True)
         except DeviceKey.DoesNotExist:
-            return Response({"detail": "Unknown device"}, status=403)
+            raise PermissionDenied("Unknown device")
 
         # Verify JWT
         try:
             payload = jwt_verify_eddsa(token, dev.public_key_b64)
         except Exception as e:
-            return Response({"detail": f"JWT verify failed: {e}"}, status=403)
+            raise AuthenticationFailed(f"JWT verify failed: {e}")
 
         # Single-use JTI
         jti = payload.get("jti")
         if not jti:
-            return Response({"detail": "Missing jti"}, status=400)
+            raise ParseError("Missing jti")
         r = redis_client()
         if r:
             ok = r.set(name=f"grant:jti:{jti}", value="1", nx=True, ex=180)
             if not ok:
-                return Response({"detail": "Replay detected"}, status=409)
+                from .exceptions import ReplayDetected
+                raise ReplayDetected()
         else:
             if GrantJTI.objects.filter(jti=jti).exists():
-                return Response({"detail": "Replay detected"}, status=409)
+                from .exceptions import ReplayDetected
+                raise ReplayDetected()
             GrantJTI.objects.create(jti=jti, user=request.user, device_id=dev.device_id)
 
         # Scope check
         scope = set(payload.get("scope") or [])
         if "receipt:ingest" not in scope:
-            return Response({"detail": "Scope denied"}, status=403)
+            raise PermissionDenied("Scope denied")
 
         try:
             # 1) Read image
