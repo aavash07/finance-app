@@ -48,3 +48,27 @@ class ReceiptItem(models.Model):
 
     def __str__(self):
         return f"{self.desc} ({self.qty} × {self.price})"
+
+
+class AuditEvent(models.Model):
+    """Audit trail for sensitive operations like decrypt/process.
+    Stores minimal structured context; avoid storing plaintext data.
+    """
+    created_at = models.DateTimeField(auto_now_add=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+    device_id = models.CharField(max_length=128, blank=True, default="")
+    jti = models.CharField(max_length=64, blank=True, default="")
+    endpoint = models.CharField(max_length=64)
+    outcome = models.CharField(max_length=32)
+    targets = models.JSONField(default=list, blank=True)
+    ip = models.GenericIPAddressField(null=True, blank=True)
+    request_id = models.CharField(max_length=36, blank=True, default="")
+    extra = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["created_at"]),
+            models.Index(fields=["user", "created_at"]),
+            models.Index(fields=["endpoint", "created_at"]),
+        ]
+        ordering = ["-created_at"]

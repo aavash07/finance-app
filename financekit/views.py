@@ -65,11 +65,29 @@ class ProcessDecryptView(APIView):
     throttle_classes = [ScopedRateThrottle, UserRateThrottle]
     throttle_scope = "decrypt"
 
-    @transaction.atomic
     def post(self, request):
         # Enforce throttle early to ensure 429 takes precedence over validation errors
         # DRF throttles (best-effort; may run again in APIView.initial)
         self.check_throttles(request)
+
+        # Local audit helper
+        from .models import AuditEvent
+        def _audit(outcome: str, extra: dict | None = None, device_id: str | None = None, jti: str | None = None):
+            try:
+                AuditEvent.objects.create(
+                    user=request.user if request.user.is_authenticated else None,
+                    device_id=device_id or "",
+                    jti=jti or "",
+                    endpoint="decrypt/process",
+                    outcome=outcome,
+                    targets=list(request.data.get("targets") or []),
+                    ip=request.META.get("REMOTE_ADDR"),
+                    request_id=getattr(request, "request_id", ""),
+                    extra=extra or {},
+                )
+            except Exception:
+                # Never break request due to audit failures
+                pass
 
         # Helper: manual lightweight per-user limiter (used only on invalid grant paths)
         def manual_limit_or_increment():
@@ -81,6 +99,7 @@ class ProcessDecryptView(APIView):
             except Exception:
                 return None
             if hits >= 1:
+                _audit("throttled")
                 raise Throttled(detail="Request was throttled.")
             try:
                 cache.set(rl_key, hits + 1, timeout=60)
@@ -103,6 +122,7 @@ class ProcessDecryptView(APIView):
             resp = manual_limit_or_increment()
             if resp:
                 return resp
+            _audit("invalid_header")
             raise ParseError("Invalid token header")
 
         # Lookup device public key
@@ -112,6 +132,7 @@ class ProcessDecryptView(APIView):
             resp = manual_limit_or_increment()
             if resp:
                 return resp
+            _audit("unknown_device", device_id=kid)
             raise PermissionDenied("Unknown device")
 
         # Verify JWT
@@ -121,6 +142,7 @@ class ProcessDecryptView(APIView):
             resp = manual_limit_or_increment()
             if resp:
                 return resp
+            _audit("auth_failed", device_id=kid)
             raise AuthenticationFailed(f"JWT verify failed: {e}")
 
         # Single-use JTI check
@@ -129,6 +151,7 @@ class ProcessDecryptView(APIView):
             resp = manual_limit_or_increment()
             if resp:
                 return resp
+            _audit("missing_jti", device_id=kid)
             raise ParseError("Missing jti")
 
         r = redis_client()
@@ -137,20 +160,20 @@ class ProcessDecryptView(APIView):
             ok = r.set(name=f"grant:jti:{jti}", value="1", nx=True, ex=180)
             if not ok:
                 from .exceptions import ReplayDetected
+                _audit("replay", device_id=kid, jti=jti)
                 raise ReplayDetected()
         else:
             if GrantJTI.objects.filter(jti=jti).exists():
                 from .exceptions import ReplayDetected
+                _audit("replay", device_id=kid, jti=jti)
                 raise ReplayDetected()
             GrantJTI.objects.create(jti=jti, user=request.user, device_id=dev.device_id)
 
-        # At this point, grant is valid and not a replay. Apply manual limiter after replay guard.
-        resp = manual_limit_or_increment()
-        if resp:
-            return resp
+        # At this point, grant is valid and not a replay; do not apply manual limiter to avoid throttling valid flows.
 
         scope = set(payload.get("scope") or [])
         if "receipt:decrypt" not in scope:
+            _audit("scope_denied", device_id=kid, jti=jti)
             raise PermissionDenied("Scope denied")
 
         # Optional: enforce targets from payload if included
@@ -160,6 +183,7 @@ class ProcessDecryptView(APIView):
         try:
             dek = unwrap_dek_rsa_oaep(dek_wrap_srv)
         except Exception:
+            _audit("unwrap_failed", device_id=kid, jti=jti)
             raise ParseError("DEK unwrap failed")
 
         # Decrypt & process
@@ -181,6 +205,7 @@ class ProcessDecryptView(APIView):
             ba = bytearray(dek)
             for i in range(len(ba)): ba[i] = 0
 
+        _audit("success", device_id=kid, jti=jti)
         return Response({"data": results, "processed_at": timezone.now().isoformat()})
 
 # ----- Dev-only helper to insert encrypted rows for testing -----
