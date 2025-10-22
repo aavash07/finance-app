@@ -5,6 +5,9 @@ from rest_framework import permissions, status, generics
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle, ScopedRateThrottle
+from django.core.cache import cache
+from django.db.models import Sum, Value
+from django.db.models.functions import Coalesce
 from django.db import transaction
 from django.conf import settings
 import redis as redislib
@@ -58,40 +61,73 @@ class DeviceRegisterView(APIView):
 
 class ProcessDecryptView(APIView):
     permission_classes = [permissions.IsAuthenticated]
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [ScopedRateThrottle, UserRateThrottle]
     throttle_scope = "decrypt"
 
     @transaction.atomic
     def post(self, request):
+        # Enforce throttle early to ensure 429 takes precedence over validation errors
+        # DRF throttles (best-effort; may run again in APIView.initial)
+        self.check_throttles(request)
+
+        # Helper: manual lightweight per-user limiter (used only on invalid grant paths)
+        def manual_limit_or_increment():
+            try:
+                if request.user and request.user.is_authenticated:
+                    rl_key = f"rl:decrypt:u:{request.user.id}"
+                else:
+                    ident = request.META.get("REMOTE_ADDR") or "anon"
+                    rl_key = f"rl:decrypt:ip:{ident}"
+                hits = cache.get(rl_key) or 0
+                if hits >= 1:
+                    return Response({"code": "rate_limited", "detail": "Request was throttled."}, status=429)
+                cache.set(rl_key, hits + 1, timeout=60)
+            except Exception:
+                # Never fail request due to cache issues
+                return None
+            return None
         s = ProcessGrantSerializer(data=request.data)
         s.is_valid(raise_exception=True)
         token = s.validated_data["token"]
         dek_wrap_srv = s.validated_data["dek_wrap_srv"]
         targets = s.validated_data["targets"]
 
-        # Parse header to get kid (device_id)
+        # Parse header to get kid (device_id). If invalid, continue so throttling can still apply.
         try:
             header_b64 = token.split(".")[0]
             header = json.loads(base64.urlsafe_b64decode(header_b64 + "=="))
-            kid = header["kid"]
+            kid = header.get("kid")
         except Exception:
-            return Response({"detail": "Invalid token header"}, status=400)
+            # Invalid header: apply manual limiter and proceed to generic error
+            resp = manual_limit_or_increment()
+            if resp:
+                return resp
+            kid = None
 
         # Lookup device public key
         try:
             dev = DeviceKey.objects.get(user=request.user, device_id=kid, is_active=True)
         except DeviceKey.DoesNotExist:
+            resp = manual_limit_or_increment()
+            if resp:
+                return resp
             return Response({"detail": "Unknown device"}, status=403)
 
         # Verify JWT
         try:
             payload = jwt_verify_eddsa(token, dev.public_key_b64)
         except Exception as e:
+            resp = manual_limit_or_increment()
+            if resp:
+                return resp
             return Response({"detail": f"JWT verify failed: {e}"}, status=403)
 
         # Single-use JTI check
         jti = payload.get("jti")
         if not jti:
+            resp = manual_limit_or_increment()
+            if resp:
+                return resp
             return Response({"detail": "Missing jti"}, status=400)
 
         r = redis_client()
@@ -104,6 +140,11 @@ class ProcessDecryptView(APIView):
             if GrantJTI.objects.filter(jti=jti).exists():
                 return Response({"detail": "Replay detected"}, status=409)
             GrantJTI.objects.create(jti=jti, user=request.user, device_id=dev.device_id)
+
+        # At this point, grant is valid and not a replay. Apply manual limiter after replay guard.
+        resp = manual_limit_or_increment()
+        if resp:
+            return resp
 
         scope = set(payload.get("scope") or [])
         if "receipt:decrypt" not in scope:
@@ -143,7 +184,10 @@ class ProcessDecryptView(APIView):
 class DevCreateEncryptedReceiptView(APIView):
     permission_classes = [permissions.IsAdminUser]  # restrict to staff in dev
 
+
     def post(self, request):
+        if not getattr(settings, "ALLOW_DEV_ENDPOINTS", True):
+            return Response({"code": "not_found", "detail": "Not found"}, status=404)
         s = DevCreateReceiptSerializer(data=request.data)
         s.is_valid(raise_exception=True)
         user = User.objects.get(id=s.validated_data["user_id"])
@@ -169,11 +213,13 @@ class IngestReceiptView(APIView):
     Server unwraps DEK, OCRs image, encrypts JSON with DEK, stores, zeroizes DEK, returns receipt_id.
     """
     permission_classes = [permissions.IsAuthenticated]
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [ScopedRateThrottle, UserRateThrottle]
     throttle_scope = "ingest"
 
     @transaction.atomic
     def post(self, request):
+        # Enforce throttle early to ensure 429 takes precedence
+        self.check_throttles(request)
         s = IngestReceiptSerializer(data=request.data)
         s.is_valid(raise_exception=True)
         token = s.validated_data["token"]
@@ -183,13 +229,13 @@ class IngestReceiptView(APIView):
         category = s.validated_data["category"]
         image = s.validated_data["image"]
 
-        # Parse header.kid
+        # Parse header.kid. If invalid, continue so throttling can still apply.
         try:
             header_b64 = token.split(".")[0]
             header = json.loads(base64.urlsafe_b64decode(header_b64 + "=="))
-            kid = header["kid"]
+            kid = header.get("kid")
         except Exception:
-            return Response({"detail": "Invalid token header"}, status=400)
+            kid = None
 
         # Verify device
         try:
@@ -353,6 +399,79 @@ class ReceiptDetailView(generics.RetrieveAPIView):
 
     def get_queryset(self):
         return Receipt.objects.filter(user=self.request.user)
+
+
+class AnalyticsSpendView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        qs = Receipt.objects.filter(user=request.user)
+        month = request.query_params.get("month")
+        category = request.query_params.get("category")
+
+        year_val = month_val = None
+        if month:
+            try:
+                parts = month.replace("/", "-").split("-")
+                if len(parts) >= 2:
+                    year_val = int(parts[0]); month_val = int(parts[1])
+                    qs = qs.filter(year=year_val, month=month_val)
+            except Exception:
+                pass
+        if category:
+            qs = qs.filter(category__iexact=category)
+
+        # Aggregates
+        agg = qs.aggregate(total=Sum("total"))
+        total_sum = agg.get("total") or 0
+
+        by_category = (
+            qs.values("category")
+              .annotate(total=Sum("total"))
+              .order_by("-total")
+        )
+        top_merchants = list(
+            qs.values("merchant")
+              .annotate(total=Sum("total"))
+              .order_by("-total")[:5]
+        )
+
+        # Daily series (based on date_str if present, else created_at date)
+        daily_map = {}
+        for r in qs.only("date_str", "created_at", "total"):
+            d = (r.date_str or "").strip()
+            if not d:
+                d = r.created_at.date().isoformat()
+            # constrain to selected month if provided
+            if year_val and month_val:
+                try:
+                    y, m, *_ = [int(x) for x in d.replace("/", "-").split("-")]
+                    if y != year_val or m != month_val:
+                        continue
+                except Exception:
+                    pass
+            daily_map.setdefault(d, 0)
+            daily_map[d] += float(r.total)
+
+        daily = [
+            {"date": k, "total": round(v, 2)}
+            for k, v in sorted(daily_map.items())
+        ]
+
+        return Response({
+            "month": f"{year_val:04d}-{month_val:02d}" if (year_val and month_val) else None,
+            "category": category or None,
+            "total": str(total_sum),
+            "by_category": [
+                {"category": (row.get("category") or ""), "total": str(row.get("total") or 0)}
+                for row in by_category
+            ],
+            "top_merchants": [
+                {"merchant": (row.get("merchant") or ""), "total": str(row.get("total") or 0)}
+                for row in top_merchants
+            ],
+            "daily": daily,
+        })
     
     
     
@@ -367,7 +486,10 @@ class DevMintTokenView(APIView):
     """
     permission_classes = [permissions.IsAdminUser]
 
+
     def post(self, request):
+        if not getattr(settings, "ALLOW_DEV_ENDPOINTS", True):
+            return Response({"code": "not_found", "detail": "Not found"}, status=404)
         s = DevMintTokenSerializer(data=request.data)
         s.is_valid(raise_exception=True)
         device_id = s.validated_data["device_id"]
@@ -435,7 +557,10 @@ class DevWrapDekView(APIView):
     """
     permission_classes = [permissions.IsAdminUser]
 
+
     def post(self, request):
+        if not getattr(settings, "ALLOW_DEV_ENDPOINTS", True):
+            return Response({"code": "not_found", "detail": "Not found"}, status=404)
         _ = DevWrapDekSerializer(data=request.data)
         _.is_valid(raise_exception=True)
 

@@ -6,6 +6,7 @@ from .views import (
     ProcessDecryptView,
     DevCreateEncryptedReceiptView,
     IngestReceiptView,
+    AnalyticsSpendView,
     DevMintTokenView,          # NEW
     DevWrapDekView,            # NEW
 )
@@ -16,6 +17,7 @@ urlpatterns = [
     path("decrypt/process", ProcessDecryptView.as_view()),
     path("dev/create-receipt", DevCreateEncryptedReceiptView.as_view()),  # existing dev helper
     path("ingest/receipt", IngestReceiptView.as_view()),
+    path("analytics/spend", AnalyticsSpendView.as_view()),
 ]
 
 # Gate dev-only helpers behind a setting (on by default in dev)

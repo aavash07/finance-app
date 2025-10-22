@@ -113,6 +113,12 @@ Content-Type: application/json
 GET {{base}}/api/v1/receipts/{{receipt_id}}
 Authorization: {{auth}}
 
+###
+# 7) Analytics: monthly spend summary (by category/merchant + daily series)
+# @name analytics_spend
+GET {{base}}/api/v1/analytics/spend?month=2025-10
+Authorization: {{auth}}
+
 
 ###
 # A) DEV: Mint a device + token (auto-registers pubkey)
