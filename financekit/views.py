@@ -4,6 +4,7 @@ from django.contrib.auth.models import User
 from rest_framework import permissions, status, generics
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle, ScopedRateThrottle
 from django.db import transaction
 from django.conf import settings
 import redis as redislib
@@ -57,6 +58,8 @@ class DeviceRegisterView(APIView):
 
 class ProcessDecryptView(APIView):
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "decrypt"
 
     @transaction.atomic
     def post(self, request):
@@ -166,6 +169,8 @@ class IngestReceiptView(APIView):
     Server unwraps DEK, OCRs image, encrypts JSON with DEK, stores, zeroizes DEK, returns receipt_id.
     """
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "ingest"
 
     @transaction.atomic
     def post(self, request):
@@ -217,31 +222,6 @@ class IngestReceiptView(APIView):
         if "receipt:ingest" not in scope:
             return Response({"detail": "Scope denied"}, status=403)
 
-        # # OCR (adapter)
-        # img_bytes = image.read()
-        # parsed = parse_image_to_json(img_bytes)
-        # pt = json.dumps(parsed, separators=(",", ":"), ensure_ascii=False).encode()
-
-        # # Unwrap DEK & encrypt
-        # try:
-        #     dek = unwrap_dek_rsa_oaep(dek_wrap_srv)
-        # except Exception:
-        #     return Response({"detail": "DEK unwrap failed"}, status=400)
-
-        # try:
-        #     nonce, ct, tag = aesgcm_encrypt(dek, pt, aad=b"receipt_v1")
-        #     rec = Receipt.objects.create(
-        #         user=request.user,
-        #         year=year, month=month, category=category,
-        #         body_nonce=nonce, body_ct=ct, body_tag=tag,
-        #     )
-        # finally:
-        #     # zeroize
-        #     ba = bytearray(dek)
-        #     for i in range(len(ba)): ba[i] = 0
-
-        # return Response({"receipt_id": rec.id}, status=200)
-        
         try:
             # 1) Read image
             img_bytes = image.read()
@@ -274,13 +254,57 @@ class IngestReceiptView(APIView):
             except Exception as e:
                 return Response({"detail": f"aesgcm_encrypt failed: {e}", "trace": traceback.format_exc()}, status=500)
 
-            # 5) Persist
+            # 5) Persist (ciphertext + derived columns)
             try:
+                # parse derived fields (best effort)
+                parsed_obj = json.loads(pt.decode("utf-8")) if isinstance(pt, (bytes, bytearray)) else {}
+                merchant = (parsed_obj.get("merchant") or "").strip()
+                currency = (parsed_obj.get("currency") or "USD").strip() or "USD"
+                # prefer date_str if present else "date"
+                date_str = (parsed_obj.get("date_str") or parsed_obj.get("date") or "")
+                from decimal import Decimal, ROUND_HALF_UP
+                def _to_cents(v):
+                    try:
+                        return Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                    except Exception:
+                        return Decimal("0.00")
+                total_val = _to_cents(parsed_obj.get("total", 0))
+
                 rec = Receipt.objects.create(
                     user=request.user,
                     year=year, month=month, category=category,
+                    merchant=merchant[:255],
+                    date_str=str(date_str)[:32],
+                    currency=currency[:8] or "USD",
+                    total=total_val,
                     body_nonce=nonce, body_ct=ct, body_tag=tag,
                 )
+
+                # optional: create items
+                try:
+                    items = parsed_obj.get("items") or []
+                    from .models import ReceiptItem
+                    from decimal import Decimal
+                    for it in items:
+                        desc = str(it.get("desc") or "").strip()
+                        if not desc:
+                            continue
+                        qty = it.get("qty", 1)
+                        price = it.get("price", 0)
+                        try:
+                            qd = Decimal(str(qty))
+                        except Exception:
+                            qd = Decimal("1")
+                        try:
+                            pd = Decimal(str(price)).quantize(Decimal("0.01"))
+                        except Exception:
+                            pd = Decimal("0.00")
+                        ReceiptItem.objects.create(
+                            receipt=rec, desc=desc[:512], qty=qd, price=pd
+                        )
+                except Exception:
+                    # do not fail ingest if items fail
+                    pass
             except Exception as e:
                 return Response({"detail": f"DB insert failed: {e}", "trace": traceback.format_exc()}, status=500)
 
@@ -299,14 +323,36 @@ class IngestReceiptView(APIView):
 
 
 class ReceiptListView(generics.ListAPIView):
-    queryset = Receipt.objects.order_by("-created_at")
     serializer_class = ReceiptSerializer
-    permission_classes = [permissions.AllowAny]  # tighten later
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        qs = Receipt.objects.filter(user=self.request.user)
+        # Filters: month=YYYY-MM, category, merchant (icontains)
+        month = self.request.query_params.get("month")
+        if month:
+            # allow YYYY-MM or YYYY/MM
+            try:
+                parts = month.replace("/", "-").split("-")
+                if len(parts) >= 2:
+                    y = int(parts[0]); m = int(parts[1])
+                    qs = qs.filter(year=y, month=m)
+            except Exception:
+                pass
+        cat = self.request.query_params.get("category")
+        if cat:
+            qs = qs.filter(category__iexact=cat)
+        merch = self.request.query_params.get("merchant")
+        if merch:
+            qs = qs.filter(merchant__icontains=merch)
+        return qs.order_by("-created_at")
 
 class ReceiptDetailView(generics.RetrieveAPIView):
-    queryset = Receipt.objects.all()
     serializer_class = ReceiptSerializer
-    permission_classes = [permissions.AllowAny]  # tighten later
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return Receipt.objects.filter(user=self.request.user)
     
     
     

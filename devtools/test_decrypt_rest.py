@@ -79,7 +79,7 @@ def wrap_dek_for_server(server_pub_pem: str, dek: bytes) -> str:
 def latest_receipt_id(sess: requests.Session) -> int | None:
     # Your ReceiptListView is open (AllowAny) and sorted newest-first
     url = f"{BASE}/api/v1/receipts"
-    r = sess.get(url)  # no auth needed per your view
+    r = sess.get(url, auth=get_auth())
     print(f"[*] Fetching latest receipt list ...\n→ {r.status_code} {url}")
     if r.status_code != 200:
         print("Could not fetch receipts:", r.text)

@@ -72,6 +72,19 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    "EXCEPTION_HANDLER": "financekit.exceptions.exception_handler",
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": int(os.getenv("PAGE_SIZE", "20")),
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.UserRateThrottle",
+    ],
+    # Baseline; per-view can override via throttle_classes
+    "DEFAULT_THROTTLE_RATES": {
+        "user": os.getenv("THROTTLE_RATE_USER", "100/min"),
+        # Named scopes for clarity if we add custom classes later
+        "ingest": os.getenv("THROTTLE_RATE_INGEST", "10/min"),
+        "decrypt": os.getenv("THROTTLE_RATE_DECRYPT", "20/min"),
+    },
 }
 
 # RSA key paths
@@ -80,3 +93,6 @@ SERVER_RSA_PUB_PATH  = os.getenv("SERVER_RSA_PUB_PATH")
 
 # Redis URL (optional for JTI single-use check)
 REDIS_URL = os.getenv("REDIS_URL")
+
+# Dev endpoints toggle
+ALLOW_DEV_ENDPOINTS = bool(int(os.getenv("ALLOW_DEV_ENDPOINTS", "1" if DEBUG else "0")))
