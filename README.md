@@ -105,3 +105,28 @@ Minimal tests are under `financekit/tests/`. Example e2e test asserts single-use
 - Missing Python deps in editor warnings are expected until your venv is active in VS Code.
 - On Windows, ensure Tesseract is installed and `pytesseract` can find it. Set env `TESSERACT_CMD` if needed.
 - If using SQLite for quick try, update `DATABASES` in `settings.py` accordingly.
+
+### Cleaning generated files
+
+On Windows, you can purge caches and build artifacts with:
+
+```
+powershell -ExecutionPolicy Bypass -File scripts/clean.ps1
+```
+
+Add `-Deep` to also clear Python caches.
+
+### Updating the local rn-sdk in the app
+
+When you change code under `rn-sdk/`, repack and install the tarball into the app:
+
+```
+powershell -ExecutionPolicy Bypass -File scripts/sync-sdk.ps1
+```
+
+Then restart Expo with a clean cache:
+
+```
+cd mobile-app
+npx expo start -c
+```

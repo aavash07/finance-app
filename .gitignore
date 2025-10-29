@@ -63,12 +63,22 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Expo / React Native caches
+.expo/
+.expo-shared/
+**/.expo/
+**/.expo-shared/
+
 # Build / Packaging
 build/
 dist/
 *.bak
 *.swp
 *.swo
+
+# rn-sdk build artifacts
+rn-sdk/dist/
+rn-sdk/*.tgz
 
 # Environment keys
 secrets/
