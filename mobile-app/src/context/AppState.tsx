@@ -1,0 +1,110 @@
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { ExpoSecureStore } from '../secureStore';
+import * as base64js from 'base64-js';
+
+type AppState = {
+  baseUrl: string; setBaseUrl: (s: string) => void;
+  username: string; setUsername: (s: string) => void;
+  password: string; setPassword: (s: string) => void;
+  deviceId: string; setDeviceId: (s: string) => void;
+  pubB64: string; setPubB64: (s: string) => void;
+  privB64: string; setPrivB64: (s: string) => void;
+  pem: string; setPem: (s: string) => void;
+  registered: boolean; setRegistered: (b: boolean) => Promise<void>;
+  authHeaders: Record<string, string>;
+  save: (obj: Partial<Record<'baseUrl'|'username'|'password'|'deviceId'|'pubB64'|'privB64'|'pem'|'registered', string>>) => Promise<void>;
+  dekWraps: Record<string, string>;
+  setReceiptDekWrap: (id: number, wrap: string) => Promise<void>;
+};
+
+const Ctx = createContext<AppState | undefined>(undefined);
+const store = new ExpoSecureStore();
+
+function asciiToBytes(str: string): Uint8Array {
+  const out = new Uint8Array(str.length);
+  for (let i = 0; i < str.length; i++) out[i] = (str.codePointAt(i) || 0) & 0xff;
+  return out;
+}
+
+function toB64Ascii(str: string): string {
+  // Username:password are ASCII-safe; avoid relying on btoa/Buffer in RN
+  return base64js.fromByteArray(asciiToBytes(str));
+}
+
+export function AppStateProvider({ children }: Readonly<{ children: React.ReactNode }>) {
+  const [baseUrl, setBaseUrl] = useState('http://10.0.2.2:8000');
+  const [username, setUsername] = useState('tester');
+  const [password, setPassword] = useState('pass1234');
+  const [deviceId, setDeviceId] = useState('device-mobile-1');
+  const [pubB64, setPubB64] = useState('');
+  const [privB64, setPrivB64] = useState('');
+  const [pem, setPem] = useState('');
+  const [registered, setRegistered] = useState(false);
+  const [dekWraps, setDekWraps] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    (async () => {
+      const sPriv = await store.get('privB64');
+      const sPub = await store.get('pubB64');
+      const sDev = await store.get('deviceId');
+      const sBase = await store.get('baseUrl');
+      const sUser = await store.get('username');
+      const sPass = await store.get('password');
+      const sPem = await store.get('pem');
+      const sReg = await store.get('registered');
+  const sWraps = await store.get('dekWraps');
+    if (sPriv) { setPrivB64(sPriv); }
+    if (sPub) { setPubB64(sPub); }
+    if (sDev) { setDeviceId(sDev); }
+    if (sBase) { setBaseUrl(sBase); }
+    if (sUser) { setUsername(sUser); }
+    if (sPass) { setPassword(sPass); }
+    if (sPem) { setPem(sPem); }
+    if (sReg) { setRegistered(sReg === '1' || sReg.toLowerCase() === 'true'); }
+      if (sWraps) {
+        try {
+          setDekWraps(JSON.parse(sWraps));
+        } catch {
+          // ignore JSON parse errors
+        }
+      }
+    })();
+  }, []);
+
+  const authHeaders = useMemo(() => ({ Authorization: `Basic ${toB64Ascii(username + ':' + password)}` }), [username, password]);
+
+  const save = async (obj: Partial<Record<'baseUrl'|'username'|'password'|'deviceId'|'pubB64'|'privB64'|'pem'|'registered', string>>) => {
+    await Promise.all(Object.entries(obj).map(([k, v]) => store.set(k, v || '')));
+    if (obj.baseUrl !== undefined) setBaseUrl(obj.baseUrl);
+    if (obj.username !== undefined) setUsername(obj.username);
+    if (obj.password !== undefined) setPassword(obj.password);
+    if (obj.deviceId !== undefined) setDeviceId(obj.deviceId);
+    if (obj.pubB64 !== undefined) setPubB64(obj.pubB64);
+    if (obj.privB64 !== undefined) setPrivB64(obj.privB64);
+    if (obj.pem !== undefined) setPem(obj.pem);
+    if (obj.registered !== undefined) setRegistered(obj.registered === '1' || obj.registered.toLowerCase() === 'true');
+  };
+
+  const markRegistered = async (b: boolean) => {
+    setRegistered(b);
+    await store.set('registered', b ? '1' : '0');
+  };
+
+  const setReceiptDekWrap = async (id: number, wrap: string) => {
+    setDekWraps(prev => {
+      const next = { ...prev, [String(id)]: wrap };
+      // Persist asynchronously; fire and forget
+      store.set('dekWraps', JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const value = useMemo<AppState>(() => ({ baseUrl, setBaseUrl, username, setUsername, password, setPassword, deviceId, setDeviceId, pubB64, setPubB64, privB64, setPrivB64, pem, setPem, registered, setRegistered: markRegistered, authHeaders, save, dekWraps, setReceiptDekWrap }), [baseUrl, username, password, deviceId, pubB64, privB64, pem, registered, authHeaders, dekWraps]);
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+}
+
+export function useAppState(): AppState {
+  const ctx = useContext(Ctx);
+  if (!ctx) throw new Error('useAppState must be used within AppStateProvider');
+  return ctx;
+}
