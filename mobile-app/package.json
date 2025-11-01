@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@financekit/rn-sdk": "file:../rn-sdk/financekit-rn-sdk-0.1.0.tgz",
+    "@react-navigation/bottom-tabs": "^6.6.1",
     "@react-navigation/native": "^6.1.18",
     "@react-navigation/native-stack": "^6.10.1",
     "base64-js": "^1.5.1",

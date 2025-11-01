@@ -1,12 +1,8 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, Button, StyleSheet, ScrollView } from 'react-native';
-import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { RootStackParamList } from '../navigation/AppNavigator';
 import { useAppState } from '../context/AppState';
-
-type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
-
-export default function SettingsScreen({ navigation }: Readonly<Props>) {
+ 
+export default function SettingsScreen() {
   const { baseUrl, username, password, deviceId, save } = useAppState();
   const [b, setB] = useState(baseUrl);
   const [u, setU] = useState(username);
@@ -27,8 +23,7 @@ export default function SettingsScreen({ navigation }: Readonly<Props>) {
       <Text>Device ID</Text>
       <TextInput style={styles.i} value={d} onChangeText={setD} />
       <View style={styles.row}><Button title="Save" onPress={onSave} /></View>
-      <View style={styles.row}><Button title="Device Setup" onPress={() => navigation.navigate('DeviceSetup')} /></View>
-      <View style={styles.row}><Button title="Receipts" onPress={() => navigation.navigate('Receipts')} /></View>
+  {/* Device Setup and Receipts are available via bottom tabs now */}
     </ScrollView>
   );
 }

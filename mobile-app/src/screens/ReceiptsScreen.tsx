@@ -3,14 +3,12 @@ import { View, Text, FlatList, TouchableOpacity, StyleSheet, Button, Alert } fro
 import * as ImagePicker from 'expo-image-picker';
 import { FinanceKitClient, generateDEK, mintGrantJWT, rsaOaepWrapDek } from '@financekit/rn-sdk';
 import { useAppState } from '../context/AppState';
-import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { RootStackParamList } from '../navigation/AppNavigator';
+import { useNavigation } from '@react-navigation/native';
 
 type Receipt = { id: number; merchant?: string; total?: number; purchased_at?: string };
 
-type Props = NativeStackScreenProps<RootStackParamList, 'Receipts'>;
-
-export default function ReceiptsScreen({ navigation }: Readonly<Props>) {
+export default function ReceiptsScreen() {
+  const navigation = useNavigation<any>();
   const { baseUrl, authHeaders, deviceId, pem, privB64, setReceiptDekWrap } = useAppState();
   const api = useMemo(() => new FinanceKitClient(baseUrl), [baseUrl]);
   const [items, setItems] = useState<Receipt[]>([]);
