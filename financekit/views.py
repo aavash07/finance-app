@@ -393,7 +393,16 @@ class IngestReceiptView(APIView):
             except Exception:
                 pass
 
-        return Response({"receipt_id": rec.id}, status=200)
+        # Return both the new receipt id and the parsed plaintext data (so the client can use it immediately)
+        derived = {
+            "merchant": rec.merchant,
+            "currency": rec.currency,
+            "date_str": rec.date_str,
+            "total": str(rec.total),
+            "receipt_id": rec.id,
+            "created_at": rec.created_at.isoformat(),
+        }
+        return Response({"receipt_id": rec.id, "data": parsed_obj, "derived": derived}, status=200)
         # --- end TEMP block ---
 
 

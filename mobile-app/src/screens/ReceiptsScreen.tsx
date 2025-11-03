@@ -9,7 +9,7 @@ type Receipt = { id: number; merchant?: string; total?: number; purchased_at?: s
 
 export default function ReceiptsScreen() {
   const navigation = useNavigation<any>();
-  const { baseUrl, authHeaders, deviceId, pem, privB64, setReceiptDekWrap } = useAppState();
+  const { baseUrl, authHeaders, deviceId, pem, privB64, setReceiptDekWrap, receipts, setReceiptData } = useAppState();
   const api = useMemo(() => new FinanceKitClient(baseUrl), [baseUrl]);
   const [items, setItems] = useState<Receipt[]>([]);
   const [loading, setLoading] = useState(false);
@@ -22,7 +22,19 @@ export default function ReceiptsScreen() {
       if (!r.ok) throw body;
       setItems(body.results || body.items || []);
     } catch (e: any) {
-      Alert.alert('Error', e?.detail || 'Failed to load receipts');
+      try {
+        // Offline fallback: use locally cached receipts
+        const cached = Object.values(receipts).map(rc => ({
+          id: rc.id,
+          merchant: rc.derived?.merchant || rc.data?.merchant || 'Receipt',
+          total: rc.derived?.total || rc.data?.total || 0,
+          purchased_at: rc.derived?.date_str || ''
+        }));
+        setItems(cached as any);
+        console.warn('Receipts load failed, using offline cache:', e?.detail || e?.message || e);
+      } catch (error_) {
+        console.warn('Offline cache load failed:', error_);
+      }
     } finally { setLoading(false); }
   };
 
@@ -40,8 +52,11 @@ export default function ReceiptsScreen() {
       const token = await mintGrantJWT(deviceId, privB64, { sub: '1', scope: ['receipt:ingest'], jti: String(now), iat: now, nbf: now - 5, exp: now + 120 });
       const resp: any = await api.ingestReceipt({ token, dek_wrap_srv, year: new Date().getFullYear(), month: new Date().getMonth() + 1, category: 'Uncategorized', image, authHeaders });
       if (resp.receipt_id) {
-        Alert.alert('Ingested', `Receipt #${resp.receipt_id}`);
+        const merch = resp?.derived?.merchant || resp?.data?.merchant || 'Receipt';
+        const total = resp?.derived?.total || resp?.data?.total || '';
+        Alert.alert('Ingested', `#${resp.receipt_id} • ${merch}${total ? ' • $' + total : ''}`);
         await setReceiptDekWrap(resp.receipt_id, dek_wrap_srv);
+        await setReceiptData(resp.receipt_id, resp.data, resp.derived);
         load();
       } else {
         Alert.alert('Error', resp?.detail || 'Ingest failed');

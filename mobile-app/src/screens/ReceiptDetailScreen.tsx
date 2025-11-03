@@ -10,12 +10,18 @@ type DecryptResponse = { data?: Record<string, unknown>; processed_at?: string }
 
 export default function ReceiptDetailScreen({ route }: Readonly<Props>) {
   const { id } = route.params;
-  const { baseUrl, authHeaders, deviceId, privB64, dekWraps } = useAppState();
+  const { baseUrl, authHeaders, deviceId, privB64, dekWraps, receipts } = useAppState();
   const api = useMemo(() => new FinanceKitClient(baseUrl), [baseUrl]);
   const [body, setBody] = useState<DecryptResponse | null>(null);
   const [busy, setBusy] = useState(false);
 
   const onDecrypt = async () => {
+    // If we have cached data for this receipt, show it immediately without server call
+    const cached = receipts[String(id)];
+    if (cached && (cached.data || cached.derived)) {
+      setBody({ data: cached.data || cached.derived, processed_at: cached.updatedAt });
+      return;
+    }
     const savedWrap = dekWraps[String(id)];
     if (!savedWrap) {
       return Alert.alert('Missing key', 'No DEK wrap found for this receipt. Ingest the receipt from this device first.');
