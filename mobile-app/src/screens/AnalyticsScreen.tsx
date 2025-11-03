@@ -179,6 +179,11 @@ export default function AnalyticsScreen() {
     return Array.from(set.values()).sort((a, b) => a.localeCompare(b));
   }, [byCategory, budgets]);
 
+  const overAlerts = useMemo(() => byCategory.filter(c => !!budgets[c.key] && c.value >= budgets[c.key]), [byCategory, budgets]);
+  const [alertsOpen, setAlertsOpen] = useState(false);
+  const [budgetsOpen, setBudgetsOpen] = useState(false);
+  const [insightsOpen, setInsightsOpen] = useState(false);
+
   const fmtAmount = (n: number) => {
     try {
       if (currencyFilter !== 'ALL') {
@@ -347,35 +352,49 @@ export default function AnalyticsScreen() {
       </Section>
 
       <Section title="Budget Alerts">
-        {byCategory.filter(c => !!budgets[c.key] && c.value >= budgets[c.key]).length === 0 ? (
-          <Text style={styles.empty}>No categories over budget</Text>
-        ) : (
-          byCategory.filter(c => !!budgets[c.key] && c.value >= budgets[c.key]).map(c => (
-            <Text key={c.key} style={{ color: '#b91c1c' }}>Over budget: {c.key} — {fmtAmount(c.value)} / {fmtAmount(budgets[c.key])}</Text>
-          ))
-        )}
+        <Pressable onPress={() => setAlertsOpen(v => !v)} style={styles.collapseHeader}>
+          <Text style={styles.collapseText}>{alertsOpen ? 'Hide' : 'Show'} alerts ({overAlerts.length})</Text>
+        </Pressable>
+        {alertsOpen ? (
+          <View>
+            {overAlerts.length === 0 ? (
+              <Text style={styles.empty}>No categories over budget</Text>
+            ) : (
+              overAlerts.map(c => (
+                <Text key={c.key} style={styles.alertText}>Over budget: {c.key} — {fmtAmount(c.value)} / {fmtAmount(budgets[c.key])}</Text>
+              ))
+            )}
+          </View>
+        ) : null}
       </Section>
 
       <Section title="Budgets (Monthly)">
-  <Text style={styles.smallNote}>Set a monthly limit per category. Leave blank or 0 to remove.</Text>
-        {categoriesAll.map(cat => (
-          <View key={cat} style={styles.rowBare}>
-            <Text style={styles.rowLabel} numberOfLines={1}>{cat}</Text>
-            <TextInput
-              placeholder="Amount"
-              keyboardType="numeric"
-              value={budgets[cat] ? String(budgets[cat]) : ''}
-              onChangeText={(txt) => {
-                const v = txt.trim();
-                const n = v ? Number.parseFloat(v) : Number.NaN;
-                if (!v) { void setBudget(cat, null); return; }
-                if (Number.isNaN(n)) return; // ignore invalid
-                void setBudget(cat, n);
-              }}
-              style={[styles.input, styles.inputSmall]}
-            />
+        <Pressable onPress={() => setBudgetsOpen(v => !v)} style={styles.collapseHeader}>
+          <Text style={styles.collapseText}>{budgetsOpen ? 'Hide' : 'Show'} editor ({Object.keys(budgets || {}).length})</Text>
+        </Pressable>
+        {budgetsOpen ? (
+          <View>
+            <Text style={styles.smallNote}>Set a monthly limit per category. Leave blank or 0 to remove.</Text>
+            {categoriesAll.map(cat => (
+              <View key={cat} style={styles.rowBare}>
+                <Text style={styles.rowLabel} numberOfLines={1}>{cat}</Text>
+                <TextInput
+                  placeholder="Amount"
+                  keyboardType="numeric"
+                  value={budgets[cat] ? String(budgets[cat]) : ''}
+                  onChangeText={(txt) => {
+                    const v = txt.trim();
+                    const n = v ? Number.parseFloat(v) : Number.NaN;
+                    if (!v) { void setBudget(cat, null); return; }
+                    if (Number.isNaN(n)) return; // ignore invalid
+                    void setBudget(cat, n);
+                  }}
+                  style={[styles.input, styles.inputSmall]}
+                />
+              </View>
+            ))}
           </View>
-        ))}
+        ) : null}
       </Section>
 
       <Section title="Export">
@@ -390,19 +409,26 @@ export default function AnalyticsScreen() {
       </Section>
 
           <Section title="Insights">
-            {largestReceipt30d ? (
-              <Text>
-                Largest (30d): {largestReceipt30d.merchant || 'Unknown'} — {fmtAmount(largestReceipt30d.total)} — {largestReceipt30d.date}
-              </Text>
-            ) : (
-              <Text>No purchases in last 30 days</Text>
-            )}
-            <Text>
-              Top category (this month): {topCatThisMonth ? topCatThisMonth[0] : 'n/a'} {topCatThisMonth ? `— ${fmtAmount(topCatThisMonth[1])}` : ''}
-            </Text>
-            <Text>
-              Latest MoM change: {latestMoM >= 0 ? '+' : ''}{latestMoM.toFixed(1)}%
-            </Text>
+            <Pressable onPress={() => setInsightsOpen(v => !v)} style={styles.collapseHeader}>
+              <Text style={styles.collapseText}>{insightsOpen ? 'Hide' : 'Show'} insights</Text>
+            </Pressable>
+            {insightsOpen ? (
+              <View>
+                {largestReceipt30d ? (
+                  <Text>
+                    Largest (30d): {largestReceipt30d.merchant || 'Unknown'} — {fmtAmount(largestReceipt30d.total)} — {largestReceipt30d.date}
+                  </Text>
+                ) : (
+                  <Text>No purchases in last 30 days</Text>
+                )}
+                <Text>
+                  Top category (this month): {topCatThisMonth ? topCatThisMonth[0] : 'n/a'} {topCatThisMonth ? `— ${fmtAmount(topCatThisMonth[1])}` : ''}
+                </Text>
+                <Text>
+                  Latest MoM change: {latestMoM >= 0 ? '+' : ''}{latestMoM.toFixed(1)}%
+                </Text>
+              </View>
+            ) : null}
           </Section>
     </ScrollView>
   );
@@ -438,6 +464,9 @@ const styles = StyleSheet.create({
   input: { backgroundColor: '#fff', borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: '#cbd5e1', paddingHorizontal: 10, paddingVertical: 8, minWidth: 140 },
   inputSmall: { minWidth: 80 },
   smallNote: { color: '#556', marginBottom: 8 },
+  collapseHeader: { paddingVertical: 6, marginBottom: 6 },
+  collapseText: { color: '#334', fontWeight: '600' },
+  alertText: { color: '#b91c1c' },
 });
 
 // Simple keyword-based categorization
