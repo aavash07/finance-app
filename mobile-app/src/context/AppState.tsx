@@ -18,6 +18,9 @@ type AppState = {
   // Local receipts cache for offline-first UI
   receipts: Record<string, { id: number; data?: any; derived?: any; updatedAt: string }>;
   setReceiptData: (id: number, data?: any, derived?: any) => Promise<void>;
+  // Budgets per category (monthly limits)
+  budgets: Record<string, number>;
+  setBudget: (category: string, amount: number | null) => Promise<void>;
 };
 
 const Ctx = createContext<AppState | undefined>(undefined);
@@ -45,40 +48,41 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
   const [registered, setRegistered] = useState(false);
   const [dekWraps, setDekWraps] = useState<Record<string, string>>({});
   const [receipts, setReceipts] = useState<Record<string, { id: number; data?: any; derived?: any; updatedAt: string }>>({});
+  const [budgets, setBudgets] = useState<Record<string, number>>({});
 
   useEffect(() => {
     (async () => {
-      const sPriv = await store.get('privB64');
-      const sPub = await store.get('pubB64');
-      const sDev = await store.get('deviceId');
-      const sBase = await store.get('baseUrl');
-      const sUser = await store.get('username');
-      const sPass = await store.get('password');
-      const sPem = await store.get('pem');
-      const sReg = await store.get('registered');
-  const sWraps = await store.get('dekWraps');
-    const sReceipts = await store.get('receiptsCache');
-    if (sPriv) { setPrivB64(sPriv); }
-    if (sPub) { setPubB64(sPub); }
-    if (sDev) { setDeviceId(sDev); }
-    if (sBase) { setBaseUrl(sBase); }
-    if (sUser) { setUsername(sUser); }
-    if (sPass) { setPassword(sPass); }
-    if (sPem) { setPem(sPem); }
-    if (sReg) { setRegistered(sReg === '1' || sReg.toLowerCase() === 'true'); }
+      const [sPriv, sPub, sDev, sBase, sUser, sPass, sPem, sReg, sWraps, sReceipts, sBudgets] = await Promise.all([
+        store.get('privB64'),
+        store.get('pubB64'),
+        store.get('deviceId'),
+        store.get('baseUrl'),
+        store.get('username'),
+        store.get('password'),
+        store.get('pem'),
+        store.get('registered'),
+        store.get('dekWraps'),
+        store.get('receiptsCache'),
+        store.get('budgets'),
+      ]);
+
+      if (sPriv) setPrivB64(sPriv);
+      if (sPub) setPubB64(sPub);
+      if (sDev) setDeviceId(sDev);
+      if (sBase) setBaseUrl(sBase);
+      if (sUser) setUsername(sUser);
+      if (sPass) setPassword(sPass);
+      if (sPem) setPem(sPem);
+      if (sReg) setRegistered(sReg === '1' || sReg.toLowerCase() === 'true');
+
       if (sWraps) {
-        try {
-          setDekWraps(JSON.parse(sWraps));
-        } catch {
-          // ignore JSON parse errors
-        }
+        try { setDekWraps(JSON.parse(sWraps)); } catch { /* ignore */ }
       }
       if (sReceipts) {
-        try {
-          setReceipts(JSON.parse(sReceipts));
-        } catch {
-          // ignore
-        }
+        try { setReceipts(JSON.parse(sReceipts)); } catch { /* ignore */ }
+      }
+      if (sBudgets) {
+        try { setBudgets(JSON.parse(sBudgets) || {}); } catch { /* ignore */ }
       }
     })();
   }, []);
@@ -120,7 +124,23 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
     });
   };
 
-  const value = useMemo<AppState>(() => ({ baseUrl, setBaseUrl, username, setUsername, password, setPassword, deviceId, setDeviceId, pubB64, setPubB64, privB64, setPrivB64, pem, setPem, registered, setRegistered: markRegistered, authHeaders, save, dekWraps, setReceiptDekWrap, receipts, setReceiptData }), [baseUrl, username, password, deviceId, pubB64, privB64, pem, registered, authHeaders, dekWraps, receipts]);
+  const setBudget = async (category: string, amount: number | null) => {
+    const cat = (category || '').trim();
+    if (!cat) return;
+    setBudgets(prev => {
+      const next = { ...prev } as Record<string, number>;
+      if (amount === null || Number.isNaN(amount) || amount <= 0) {
+        // remove budget if null/invalid
+        if (cat in next) delete next[cat];
+      } else {
+        next[cat] = amount;
+      }
+      store.set('budgets', JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const value = useMemo<AppState>(() => ({ baseUrl, setBaseUrl, username, setUsername, password, setPassword, deviceId, setDeviceId, pubB64, setPubB64, privB64, setPrivB64, pem, setPem, registered, setRegistered: markRegistered, authHeaders, save, dekWraps, setReceiptDekWrap, receipts, setReceiptData, budgets, setBudget }), [baseUrl, username, password, deviceId, pubB64, privB64, pem, registered, authHeaders, dekWraps, receipts, budgets]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

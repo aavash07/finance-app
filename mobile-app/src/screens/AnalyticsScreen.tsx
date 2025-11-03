@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, TextInput } from 'react-native';
 import { useAppState } from '../context/AppState';
 
 type Metric = { label: string; value: string };
@@ -25,8 +25,22 @@ type DateFilter = 'ALL' | 'L3' | 'L6' | 'YTD';
 function monthStart(d: Date): Date { return new Date(d.getFullYear(), d.getMonth(), 1); }
 function addMonths(d: Date, delta: number): Date { return new Date(d.getFullYear(), d.getMonth() + delta, 1); }
 
+function Bar({ pct, color }: Readonly<{ pct: number; color?: string }>) {
+  const w = Math.max(2, Math.min(100, pct));
+  return <View style={[styles.bar, { width: `${w}%`, backgroundColor: color || styles.bar.backgroundColor as any }]} />;
+}
+
+function Section({ title, children }: Readonly<React.PropsWithChildren<{ title: string }>>) {
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      {children}
+    </View>
+  );
+}
+
 export default function AnalyticsScreen() {
-  const { receipts } = useAppState();
+  const { receipts, budgets, setBudget } = useAppState();
   const baseList = useMemo(() => Object.values(receipts || {}), [receipts]);
 
   const currencies = useMemo(() => {
@@ -42,6 +56,10 @@ export default function AnalyticsScreen() {
   const [dateFilter, setDateFilter] = useState<DateFilter>('ALL');
   const [currencyFilter, setCurrencyFilter] = useState<string>('ALL');
   const [showCsv, setShowCsv] = useState(false);
+  const [q, setQ] = useState('');
+  const [minAmt, setMinAmt] = useState('');
+  const [maxAmt, setMaxAmt] = useState('');
+  const [onlyWithItems, setOnlyWithItems] = useState(false);
 
   const filtered = useMemo(() => {
     // Date filtering
@@ -51,18 +69,29 @@ export default function AnalyticsScreen() {
     if (dateFilter === 'L6') minDate = addMonths(monthStart(now), -5);
     if (dateFilter === 'YTD') minDate = new Date(now.getFullYear(), 0, 1);
 
-    return baseList.filter(r => {
+    const qLower = q.trim().toLowerCase();
+  const minV = minAmt.trim() ? Number.parseFloat(minAmt.trim()) : Number.NaN;
+  const maxV = maxAmt.trim() ? Number.parseFloat(maxAmt.trim()) : Number.NaN;
+
+    const matches = (r: any) => {
       const d: any = r?.data || r?.derived || {};
       const dateStr = safeStr(d.date_str) || safeStr(d.date) || r.updatedAt || '';
       const dt = new Date(dateStr);
-      if (minDate && dt < minDate) return false;
-      if (currencyFilter !== 'ALL') {
-        const cur = safeStr(d.currency);
-        if (cur !== currencyFilter) return false;
-      }
-      return true;
-    });
-  }, [baseList, dateFilter, currencyFilter]);
+      const total = safeNum(d.total);
+      const itemsArr: any[] = Array.isArray(d.items) ? d.items : [];
+      const merchant = safeStr(d.merchant).toLowerCase();
+      const itemHit = qLower ? itemsArr.some(it => ((safeStr(it?.desc) || safeStr(it?.name)).toLowerCase().includes(qLower))) : true;
+
+      const isDateOk = !minDate || dt >= minDate;
+      const isCurrencyOk = currencyFilter === 'ALL' || safeStr(d.currency) === currencyFilter;
+      const isQueryOk = !qLower || merchant.includes(qLower) || itemHit;
+      const isAmtOk = (Number.isNaN(minV) || total >= minV) && (Number.isNaN(maxV) || total <= maxV);
+      const isItemsOk = !onlyWithItems || itemsArr.length > 0;
+
+      return isDateOk && isCurrencyOk && isQueryOk && isAmtOk && isItemsOk;
+    };
+    return baseList.filter(matches);
+  }, [baseList, dateFilter, currencyFilter, q, minAmt, maxAmt, onlyWithItems]);
 
   const { kpis, byMonth, byMerchant, byCurrency, byCategory, csv } = useMemo(() => {
     const totals: number[] = [];
@@ -137,21 +166,18 @@ export default function AnalyticsScreen() {
     return { kpis, byMonth, byMerchant, byCurrency, byCategory, csv };
   }, [filtered]);
 
-  const Bar = ({ pct }: { pct: number }) => {
-    const w = Math.max(2, Math.min(100, pct));
-    return <View style={[styles.bar, { width: `${w}%` }]} />;
-  };
-
-  const Section = ({ title, children }: React.PropsWithChildren<{ title: string }>) => (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      {children}
-    </View>
-  );
+  
 
   const maxMonth = Math.max(1, ...byMonth.map(x => x.value));
   const maxMerchant = Math.max(1, ...byMerchant.map(x => x.value));
   const maxCategory = Math.max(1, ...byCategory.map(x => x.value));
+  const categoriesAll = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of byCategory) set.add(c.key);
+    for (const k of Object.keys(budgets || {})) set.add(k);
+    for (const def of CATEGORY_KEYWORDS) set.add(def.key);
+    return Array.from(set.values()).sort((a, b) => a.localeCompare(b));
+  }, [byCategory, budgets]);
 
   const fmtAmount = (n: number) => {
     try {
@@ -163,6 +189,43 @@ export default function AnalyticsScreen() {
       return n.toFixed(2);
     }
   };
+
+  // Insights
+  const now = new Date();
+  const last30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  let largestReceipt30d: { date: string; merchant: string; total: number } | null = null;
+  for (const r of filtered) {
+    const d: any = r?.data || r?.derived || {};
+    const dateStr = safeStr(d.date_str) || safeStr(d.date) || r.updatedAt || '';
+    const dt = new Date(dateStr);
+    if (dt >= last30) {
+      const total = safeNum(d.total);
+      if (!largestReceipt30d || total > largestReceipt30d.total) {
+        largestReceipt30d = { date: dateStr, merchant: safeStr(d.merchant), total };
+      }
+    }
+  }
+
+  const thisMonthStart = monthStart(now);
+  const catTotalsThisMonth: Record<string, number> = {};
+  for (const r of filtered) {
+    const d: any = r?.data || r?.derived || {};
+    const dateStr = safeStr(d.date_str) || safeStr(d.date) || r.updatedAt || '';
+    const dt = new Date(dateStr);
+    if (dt >= thisMonthStart && Array.isArray(d.items)) {
+      for (const it of d.items) {
+        const desc = safeStr(it?.desc) || safeStr(it?.name);
+        const qty = safeNum(it?.qty) || 1;
+        const price = safeNum(it?.price);
+        const amount = Math.max(0, qty * price);
+        const cat = categorize(desc);
+        catTotalsThisMonth[cat] = (catTotalsThisMonth[cat] || 0) + amount;
+      }
+    }
+  }
+  const topCatThisMonth = Object.entries(catTotalsThisMonth).sort((a,b)=>b[1]-a[1])[0];
+
+  const latestMoM = byMonth.length >= 2 ? ((byMonth[0].value - byMonth[1].value) / (byMonth[1].value || 1)) * 100 : 0;
 
   return (
     <ScrollView contentContainerStyle={styles.c}>
@@ -185,6 +248,32 @@ export default function AnalyticsScreen() {
               <Text style={[styles.pillText, currencyFilter === c && styles.pillTextActive]}>{c}</Text>
             </Pressable>
           ))}
+        </View>
+        <View style={[styles.pillsRow, { alignItems: 'center' }] }>
+          <TextInput
+            placeholder="Search merchant/items"
+            value={q}
+            onChangeText={setQ}
+            style={styles.input}
+            autoCapitalize="none"
+          />
+          <TextInput
+            placeholder="Min"
+            value={minAmt}
+            onChangeText={setMinAmt}
+            style={[styles.input, styles.inputSmall]}
+            keyboardType="numeric"
+          />
+          <TextInput
+            placeholder="Max"
+            value={maxAmt}
+            onChangeText={setMaxAmt}
+            style={[styles.input, styles.inputSmall]}
+            keyboardType="numeric"
+          />
+          <Pressable onPress={() => setOnlyWithItems(v => !v)} style={[styles.pill, onlyWithItems && styles.pillActive]}>
+            <Text style={[styles.pillText, onlyWithItems && styles.pillTextActive]}>Has items</Text>
+          </Pressable>
         </View>
       </View>
 
@@ -243,9 +332,48 @@ export default function AnalyticsScreen() {
           <View key={c.key} style={styles.row}>
             <Text style={styles.rowLabel} numberOfLines={1}>{c.key}</Text>
             <View style={styles.rowBarWrap}>
-              <Bar pct={(c.value / maxCategory) * 100} />
+              {(() => {
+                let color: string | undefined;
+                if (budgets[c.key]) {
+                  const ratio = c.value / budgets[c.key];
+                  if (ratio >= 1) color = '#ef4444'; else if (ratio >= 0.8) color = '#f59e0b'; else color = '#10b981';
+                }
+                return <Bar pct={(c.value / maxCategory) * 100} color={color} />;
+              })()}
             </View>
             <Text style={styles.rowVal}>{fmtAmount(c.value)}</Text>
+          </View>
+        ))}
+      </Section>
+
+      <Section title="Budget Alerts">
+        {byCategory.filter(c => !!budgets[c.key] && c.value >= budgets[c.key]).length === 0 ? (
+          <Text style={styles.empty}>No categories over budget</Text>
+        ) : (
+          byCategory.filter(c => !!budgets[c.key] && c.value >= budgets[c.key]).map(c => (
+            <Text key={c.key} style={{ color: '#b91c1c' }}>Over budget: {c.key} — {fmtAmount(c.value)} / {fmtAmount(budgets[c.key])}</Text>
+          ))
+        )}
+      </Section>
+
+      <Section title="Budgets (Monthly)">
+  <Text style={styles.smallNote}>Set a monthly limit per category. Leave blank or 0 to remove.</Text>
+        {categoriesAll.map(cat => (
+          <View key={cat} style={styles.rowBare}>
+            <Text style={styles.rowLabel} numberOfLines={1}>{cat}</Text>
+            <TextInput
+              placeholder="Amount"
+              keyboardType="numeric"
+              value={budgets[cat] ? String(budgets[cat]) : ''}
+              onChangeText={(txt) => {
+                const v = txt.trim();
+                const n = v ? Number.parseFloat(v) : Number.NaN;
+                if (!v) { void setBudget(cat, null); return; }
+                if (Number.isNaN(n)) return; // ignore invalid
+                void setBudget(cat, n);
+              }}
+              style={[styles.input, styles.inputSmall]}
+            />
           </View>
         ))}
       </Section>
@@ -260,6 +388,22 @@ export default function AnalyticsScreen() {
           </View>
         ) : null}
       </Section>
+
+          <Section title="Insights">
+            {largestReceipt30d ? (
+              <Text>
+                Largest (30d): {largestReceipt30d.merchant || 'Unknown'} — {fmtAmount(largestReceipt30d.total)} — {largestReceipt30d.date}
+              </Text>
+            ) : (
+              <Text>No purchases in last 30 days</Text>
+            )}
+            <Text>
+              Top category (this month): {topCatThisMonth ? topCatThisMonth[0] : 'n/a'} {topCatThisMonth ? `— ${fmtAmount(topCatThisMonth[1])}` : ''}
+            </Text>
+            <Text>
+              Latest MoM change: {latestMoM >= 0 ? '+' : ''}{latestMoM.toFixed(1)}%
+            </Text>
+          </Section>
     </ScrollView>
   );
 }
@@ -291,6 +435,9 @@ const styles = StyleSheet.create({
   empty: { color: '#556' },
   csvBox: { marginTop: 8, padding: 10, backgroundColor: '#fff', borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, borderColor: '#e5e7eb' },
   csvText: { fontFamily: 'monospace' as any, fontSize: 12 },
+  input: { backgroundColor: '#fff', borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: '#cbd5e1', paddingHorizontal: 10, paddingVertical: 8, minWidth: 140 },
+  inputSmall: { minWidth: 80 },
+  smallNote: { color: '#556', marginBottom: 8 },
 });
 
 // Simple keyword-based categorization
