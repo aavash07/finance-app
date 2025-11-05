@@ -1,5 +1,7 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, TextInput } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, Modal, SafeAreaView, Alert, Share } from 'react-native';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 import { useAppState } from '../context/AppState';
 
 type Metric = { label: string; value: string };
@@ -181,8 +183,8 @@ export default function AnalyticsScreen() {
 
   const overAlerts = useMemo(() => byCategory.filter(c => !!budgets[c.key] && c.value >= budgets[c.key]), [byCategory, budgets]);
   const [alertsOpen, setAlertsOpen] = useState(false);
-  const [budgetsOpen, setBudgetsOpen] = useState(false);
-  const [insightsOpen, setInsightsOpen] = useState(false);
+  const [budgetModalOpen, setBudgetModalOpen] = useState(false);
+  const [insightsModalOpen, setInsightsModalOpen] = useState(false);
 
   const fmtAmount = (n: number) => {
     try {
@@ -232,55 +234,40 @@ export default function AnalyticsScreen() {
 
   const latestMoM = byMonth.length >= 2 ? ((byMonth[0].value - byMonth[1].value) / (byMonth[1].value || 1)) * 100 : 0;
 
+  const onShareCsv = async () => {
+    try {
+      const fileUri = (FileSystem.cacheDirectory || '') + `receipts-${Date.now()}.csv`;
+      await FileSystem.writeAsStringAsync(fileUri, csv, { encoding: FileSystem.EncodingType.UTF8 });
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(fileUri, { mimeType: 'text/csv', dialogTitle: 'Share Receipts CSV', UTI: 'public.comma-separated-values-text' });
+      } else {
+        await Share.share({ title: 'Receipts CSV', message: csv });
+      }
+    } catch (e: any) {
+      Alert.alert('Share failed', e?.message || 'Unknown error');
+    }
+  };
+
   return (
     <ScrollView contentContainerStyle={styles.c}>
       <Text style={styles.t}>Analytics</Text>
 
-      <View style={styles.filters}>
-        <View style={styles.pillsRow}>
-          {(['ALL','L3','L6','YTD'] as DateFilter[]).map(v => (
-            <Pressable key={v} onPress={() => setDateFilter(v)} style={[styles.pill, dateFilter === v && styles.pillActive]}>
-              <Text style={[styles.pillText, dateFilter === v && styles.pillTextActive]}>{v}</Text>
-            </Pressable>
-          ))}
-        </View>
-        <View style={styles.pillsRow}>
-          <Pressable key={'ALL'} onPress={() => setCurrencyFilter('ALL')} style={[styles.pill, currencyFilter === 'ALL' && styles.pillActive]}>
-            <Text style={[styles.pillText, currencyFilter === 'ALL' && styles.pillTextActive]}>All</Text>
-          </Pressable>
-          {currencies.map(c => (
-            <Pressable key={c} onPress={() => setCurrencyFilter(c)} style={[styles.pill, currencyFilter === c && styles.pillActive]}>
-              <Text style={[styles.pillText, currencyFilter === c && styles.pillTextActive]}>{c}</Text>
-            </Pressable>
-          ))}
-        </View>
-        <View style={[styles.pillsRow, { alignItems: 'center' }] }>
-          <TextInput
-            placeholder="Search merchant/items"
-            value={q}
-            onChangeText={setQ}
-            style={styles.input}
-            autoCapitalize="none"
-          />
-          <TextInput
-            placeholder="Min"
-            value={minAmt}
-            onChangeText={setMinAmt}
-            style={[styles.input, styles.inputSmall]}
-            keyboardType="numeric"
-          />
-          <TextInput
-            placeholder="Max"
-            value={maxAmt}
-            onChangeText={setMaxAmt}
-            style={[styles.input, styles.inputSmall]}
-            keyboardType="numeric"
-          />
-          <Pressable onPress={() => setOnlyWithItems(v => !v)} style={[styles.pill, onlyWithItems && styles.pillActive]}>
-            <Text style={[styles.pillText, onlyWithItems && styles.pillTextActive]}>Has items</Text>
-          </Pressable>
-        </View>
-      </View>
+      <FiltersPanel
+        currencies={currencies}
+        dateFilter={dateFilter}
+        setDateFilter={setDateFilter}
+        currencyFilter={currencyFilter}
+        setCurrencyFilter={setCurrencyFilter}
+        q={q}
+        setQ={setQ}
+        minAmt={minAmt}
+        setMinAmt={setMinAmt}
+        maxAmt={maxAmt}
+        setMaxAmt={setMaxAmt}
+        onlyWithItems={onlyWithItems}
+        setOnlyWithItems={(v: boolean) => setOnlyWithItems(v)}
+      />
 
       <View style={styles.kpiRow}>
         {kpis.map(k => (
@@ -291,65 +278,13 @@ export default function AnalyticsScreen() {
         ))}
       </View>
 
-      <Section title="Monthly Spend">
-        {byMonth.length === 0 ? <Text style={styles.empty}>No data yet</Text> : byMonth.map((m, idx) => {
-          const prev = byMonth[idx + 1]?.value ?? 0;
-          const deltaPct = prev ? ((m.value - prev) / prev) * 100 : 0;
-          const sign = deltaPct > 0 ? '+' : '';
-          return (
-            <View key={m.key} style={styles.row}>
-              <Text style={styles.rowLabel}>{m.key}</Text>
-              <View style={styles.rowBarWrap}>
-                <Bar pct={(m.value / maxMonth) * 100} />
-              </View>
-              <View style={{ width: 140 }}>
-                <Text style={styles.rowVal}>{fmtAmount(m.value)}</Text>
-                {prev ? <Text style={deltaPct >= 0 ? styles.deltaUp : styles.deltaDown}>{sign}{deltaPct.toFixed(1)}%</Text> : null}
-              </View>
-            </View>
-          );
-        })}
-      </Section>
+      <MonthlySpendSection byMonth={byMonth} maxMonth={maxMonth} fmtAmount={fmtAmount} />
 
-      <Section title="Top Merchants">
-        {byMerchant.length === 0 ? <Text style={styles.empty}>No data yet</Text> : byMerchant.map(m => (
-          <View key={m.key} style={styles.row}>
-            <Text style={styles.rowLabel} numberOfLines={1}>{m.key}</Text>
-            <View style={styles.rowBarWrap}>
-              <Bar pct={(m.value / maxMerchant) * 100} />
-            </View>
-            <Text style={styles.rowVal}>{fmtAmount(m.value)}</Text>
-          </View>
-        ))}
-      </Section>
+      <TopMerchantsSection byMerchant={byMerchant} maxMerchant={maxMerchant} fmtAmount={fmtAmount} />
 
-      <Section title="By Currency">
-        {byCurrency.length === 0 ? <Text style={styles.empty}>No data yet</Text> : byCurrency.map(c => (
-          <View key={c.key} style={styles.rowBare}>
-            <Text style={styles.rowLabel}>{c.key}</Text>
-            <Text style={styles.rowVal}>{fmtAmount(c.value)}</Text>
-          </View>
-        ))}
-      </Section>
+      <ByCurrencySection byCurrency={byCurrency} fmtAmount={fmtAmount} />
 
-      <Section title="By Category (Top)">
-        {byCategory.length === 0 ? <Text style={styles.empty}>No data yet</Text> : byCategory.map(c => (
-          <View key={c.key} style={styles.row}>
-            <Text style={styles.rowLabel} numberOfLines={1}>{c.key}</Text>
-            <View style={styles.rowBarWrap}>
-              {(() => {
-                let color: string | undefined;
-                if (budgets[c.key]) {
-                  const ratio = c.value / budgets[c.key];
-                  if (ratio >= 1) color = '#ef4444'; else if (ratio >= 0.8) color = '#f59e0b'; else color = '#10b981';
-                }
-                return <Bar pct={(c.value / maxCategory) * 100} color={color} />;
-              })()}
-            </View>
-            <Text style={styles.rowVal}>{fmtAmount(c.value)}</Text>
-          </View>
-        ))}
-      </Section>
+      <ByCategorySection byCategory={byCategory} maxCategory={maxCategory} budgets={budgets} fmtAmount={fmtAmount} />
 
       <Section title="Budget Alerts">
         <Pressable onPress={() => setAlertsOpen(v => !v)} style={styles.collapseHeader}>
@@ -369,37 +304,24 @@ export default function AnalyticsScreen() {
       </Section>
 
       <Section title="Budgets (Monthly)">
-        <Pressable onPress={() => setBudgetsOpen(v => !v)} style={styles.collapseHeader}>
-          <Text style={styles.collapseText}>{budgetsOpen ? 'Hide' : 'Show'} editor ({Object.keys(budgets || {}).length})</Text>
+        <Pressable onPress={() => setBudgetModalOpen(true)} style={styles.collapseHeader}>
+          <Text style={styles.collapseText}>Open budget editor ({Object.keys(budgets || {}).length})</Text>
         </Pressable>
-        {budgetsOpen ? (
-          <View>
-            <Text style={styles.smallNote}>Set a monthly limit per category. Leave blank or 0 to remove.</Text>
-            {categoriesAll.map(cat => (
-              <View key={cat} style={styles.rowBare}>
-                <Text style={styles.rowLabel} numberOfLines={1}>{cat}</Text>
-                <TextInput
-                  placeholder="Amount"
-                  keyboardType="numeric"
-                  value={budgets[cat] ? String(budgets[cat]) : ''}
-                  onChangeText={(txt) => {
-                    const v = txt.trim();
-                    const n = v ? Number.parseFloat(v) : Number.NaN;
-                    if (!v) { void setBudget(cat, null); return; }
-                    if (Number.isNaN(n)) return; // ignore invalid
-                    void setBudget(cat, n);
-                  }}
-                  style={[styles.input, styles.inputSmall]}
-                />
-              </View>
-            ))}
-          </View>
-        ) : null}
       </Section>
+      <BudgetsEditorModal
+        visible={budgetModalOpen}
+        onClose={() => setBudgetModalOpen(false)}
+        categoriesAll={categoriesAll}
+        budgets={budgets}
+        setBudget={setBudget}
+      />
 
       <Section title="Export">
         <Pressable onPress={() => setShowCsv(v => !v)} style={[styles.pill, styles.pillInline]}>
           <Text style={styles.pillText}>{showCsv ? 'Hide CSV' : 'Show CSV'}</Text>
+        </Pressable>
+        <Pressable onPress={onShareCsv} style={[styles.pill, styles.pillInline]}>
+          <Text style={styles.pillText}>Share CSV</Text>
         </Pressable>
         {showCsv ? (
           <View style={styles.csvBox}>
@@ -409,27 +331,18 @@ export default function AnalyticsScreen() {
       </Section>
 
           <Section title="Insights">
-            <Pressable onPress={() => setInsightsOpen(v => !v)} style={styles.collapseHeader}>
-              <Text style={styles.collapseText}>{insightsOpen ? 'Hide' : 'Show'} insights</Text>
+            <Pressable onPress={() => setInsightsModalOpen(true)} style={styles.collapseHeader}>
+              <Text style={styles.collapseText}>View insights</Text>
             </Pressable>
-            {insightsOpen ? (
-              <View>
-                {largestReceipt30d ? (
-                  <Text>
-                    Largest (30d): {largestReceipt30d.merchant || 'Unknown'} — {fmtAmount(largestReceipt30d.total)} — {largestReceipt30d.date}
-                  </Text>
-                ) : (
-                  <Text>No purchases in last 30 days</Text>
-                )}
-                <Text>
-                  Top category (this month): {topCatThisMonth ? topCatThisMonth[0] : 'n/a'} {topCatThisMonth ? `— ${fmtAmount(topCatThisMonth[1])}` : ''}
-                </Text>
-                <Text>
-                  Latest MoM change: {latestMoM >= 0 ? '+' : ''}{latestMoM.toFixed(1)}%
-                </Text>
-              </View>
-            ) : null}
           </Section>
+          <InsightsModal
+            visible={insightsModalOpen}
+            onClose={() => setInsightsModalOpen(false)}
+            largestReceipt30d={largestReceipt30d}
+            topCatThisMonth={topCatThisMonth}
+            latestMoM={latestMoM}
+            fmtAmount={fmtAmount}
+          />
     </ScrollView>
   );
 }
@@ -467,7 +380,119 @@ const styles = StyleSheet.create({
   collapseHeader: { paddingVertical: 6, marginBottom: 6 },
   collapseText: { color: '#334', fontWeight: '600' },
   alertText: { color: '#b91c1c' },
+  modalContainer: { flex: 1, backgroundColor: '#fff' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#e5e7eb' },
+  modalTitle: { fontSize: 18, fontWeight: '700' },
+  modalClose: { color: '#4f46e5', fontWeight: '600' },
+  modalBody: { padding: 16 },
 });
+
+type SetBudgetFn = (category: string, amount: number | null) => Promise<void> | void;
+
+type BudgetsEditorModalProps = {
+  visible: boolean;
+  onClose: () => void;
+  categoriesAll: string[];
+  budgets: Record<string, number>;
+  setBudget: SetBudgetFn;
+};
+
+function BudgetsEditorModal({ visible, onClose, categoriesAll, budgets, setBudget }: Readonly<BudgetsEditorModalProps>) {
+  const count = Object.keys(budgets || {}).length;
+  const onClearAll = () => {
+    if (!count) return;
+    Alert.alert(
+      'Clear all budgets',
+      'This will remove all category budget limits.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear All', style: 'destructive',
+          onPress: () => {
+            for (const k of Object.keys(budgets || {})) {
+              setBudget(k, null);
+            }
+          }
+        }
+      ]
+    );
+  };
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <SafeAreaView style={styles.modalContainer}>
+        <View style={styles.modalHeader}>
+          <Text style={styles.modalTitle}>Budgets (Monthly)</Text>
+          <View style={{ flexDirection: 'row', gap: 16 }}>
+            <Pressable onPress={onClearAll} disabled={count === 0}>
+              <Text style={[styles.modalClose, { color: count ? '#ef4444' : '#94a3b8' }]}>Clear All</Text>
+            </Pressable>
+            <Pressable onPress={onClose}>
+              <Text style={styles.modalClose}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+        <ScrollView contentContainerStyle={styles.modalBody}>
+          <Text style={styles.smallNote}>Set a monthly limit per category. Leave blank or 0 to remove.</Text>
+          {categoriesAll.map(cat => (
+            <View key={cat} style={styles.rowBare}>
+              <Text style={styles.rowLabel} numberOfLines={1}>{cat}</Text>
+              <TextInput
+                placeholder="Amount"
+                keyboardType="numeric"
+                value={budgets[cat] ? String(budgets[cat]) : ''}
+                onChangeText={(txt) => {
+                  const v = txt.trim();
+                  const n = v ? Number.parseFloat(v) : Number.NaN;
+                  if (!v) { setBudget(cat, null); return; }
+                  if (Number.isNaN(n)) return; // ignore invalid
+                  setBudget(cat, n);
+                }}
+                style={[styles.input, styles.inputSmall]}
+              />
+            </View>
+          ))}
+        </ScrollView>
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
+type InsightsModalProps = {
+  visible: boolean;
+  onClose: () => void;
+  largestReceipt30d: { date: string; merchant: string; total: number } | null;
+  topCatThisMonth?: [string, number];
+  latestMoM: number;
+  fmtAmount: (n: number) => string;
+};
+
+function InsightsModal({ visible, onClose, largestReceipt30d, topCatThisMonth, latestMoM, fmtAmount }: Readonly<InsightsModalProps>) {
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <SafeAreaView style={styles.modalContainer}>
+        <View style={styles.modalHeader}>
+          <Text style={styles.modalTitle}>Insights</Text>
+          <Pressable onPress={onClose}><Text style={styles.modalClose}>Close</Text></Pressable>
+        </View>
+        <ScrollView contentContainerStyle={styles.modalBody}>
+          {largestReceipt30d ? (
+            <Text>
+              Largest (30d): {largestReceipt30d.merchant || 'Unknown'} — {fmtAmount(largestReceipt30d.total)} — {largestReceipt30d.date}
+            </Text>
+          ) : (
+            <Text>No purchases in last 30 days</Text>
+          )}
+          <Text>
+            Top category (this month): {topCatThisMonth ? topCatThisMonth[0] : 'n/a'} {topCatThisMonth ? `— ${fmtAmount(topCatThisMonth[1])}` : ''}
+          </Text>
+          <Text>
+            Latest MoM change: {latestMoM >= 0 ? '+' : ''}{latestMoM.toFixed(1)}%
+          </Text>
+        </ScrollView>
+      </SafeAreaView>
+    </Modal>
+  );
+}
 
 // Simple keyword-based categorization
 const CATEGORY_KEYWORDS: { key: string; keywords: string[] }[] = [
@@ -488,4 +513,150 @@ function categorize(desc: string): string {
     }
   }
   return 'Other';
+}
+
+// -------- Subcomponents ---------
+type FiltersPanelProps = {
+  currencies: string[];
+  dateFilter: DateFilter;
+  setDateFilter: (v: DateFilter) => void;
+  currencyFilter: string;
+  setCurrencyFilter: (v: string) => void;
+  q: string;
+  setQ: (v: string) => void;
+  minAmt: string;
+  setMinAmt: (v: string) => void;
+  maxAmt: string;
+  setMaxAmt: (v: string) => void;
+  onlyWithItems: boolean;
+  setOnlyWithItems: (v: boolean) => void;
+};
+
+function FiltersPanel({ currencies, dateFilter, setDateFilter, currencyFilter, setCurrencyFilter, q, setQ, minAmt, setMinAmt, maxAmt, setMaxAmt, onlyWithItems, setOnlyWithItems }: Readonly<FiltersPanelProps>) {
+  return (
+    <View style={styles.filters}>
+      <View style={styles.pillsRow}>
+        {(['ALL','L3','L6','YTD'] as DateFilter[]).map(v => (
+          <Pressable key={v} onPress={() => setDateFilter(v)} style={[styles.pill, dateFilter === v && styles.pillActive]}>
+            <Text style={[styles.pillText, dateFilter === v && styles.pillTextActive]}>{v}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <View style={styles.pillsRow}>
+        <Pressable key={'ALL'} onPress={() => setCurrencyFilter('ALL')} style={[styles.pill, currencyFilter === 'ALL' && styles.pillActive]}>
+          <Text style={[styles.pillText, currencyFilter === 'ALL' && styles.pillTextActive]}>All</Text>
+        </Pressable>
+        {currencies.map(c => (
+          <Pressable key={c} onPress={() => setCurrencyFilter(c)} style={[styles.pill, currencyFilter === c && styles.pillActive]}>
+            <Text style={[styles.pillText, currencyFilter === c && styles.pillTextActive]}>{c}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <View style={[styles.pillsRow, { alignItems: 'center' }] }>
+        <TextInput
+          placeholder="Search merchant/items"
+          value={q}
+          onChangeText={setQ}
+          style={styles.input}
+          autoCapitalize="none"
+        />
+        <TextInput
+          placeholder="Min"
+          value={minAmt}
+          onChangeText={setMinAmt}
+          style={[styles.input, styles.inputSmall]}
+          keyboardType="numeric"
+        />
+        <TextInput
+          placeholder="Max"
+          value={maxAmt}
+          onChangeText={setMaxAmt}
+          style={[styles.input, styles.inputSmall]}
+          keyboardType="numeric"
+        />
+        <Pressable onPress={() => setOnlyWithItems(!onlyWithItems)} style={[styles.pill, onlyWithItems && styles.pillActive]}>
+          <Text style={[styles.pillText, onlyWithItems && styles.pillTextActive]}>Has items</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+type ByMonth = { key: string; value: number }[];
+type ByKV = { key: string; value: number }[];
+
+function MonthlySpendSection({ byMonth, maxMonth, fmtAmount }: Readonly<{ byMonth: ByMonth; maxMonth: number; fmtAmount: (n: number) => string }>) {
+  return (
+    <Section title="Monthly Spend">
+      {byMonth.length === 0 ? <Text style={styles.empty}>No data yet</Text> : byMonth.map((m, idx) => {
+        const prev = byMonth[idx + 1]?.value ?? 0;
+        const deltaPct = prev ? ((m.value - prev) / prev) * 100 : 0;
+        const sign = deltaPct > 0 ? '+' : '';
+        return (
+          <View key={m.key} style={styles.row}>
+            <Text style={styles.rowLabel}>{m.key}</Text>
+            <View style={styles.rowBarWrap}>
+              <Bar pct={(m.value / maxMonth) * 100} />
+            </View>
+            <View style={{ width: 140 }}>
+              <Text style={styles.rowVal}>{fmtAmount(m.value)}</Text>
+              {prev ? <Text style={deltaPct >= 0 ? styles.deltaUp : styles.deltaDown}>{sign}{deltaPct.toFixed(1)}%</Text> : null}
+            </View>
+          </View>
+        );
+      })}
+    </Section>
+  );
+}
+
+function TopMerchantsSection({ byMerchant, maxMerchant, fmtAmount }: Readonly<{ byMerchant: ByKV; maxMerchant: number; fmtAmount: (n:number)=>string }>) {
+  return (
+    <Section title="Top Merchants">
+      {byMerchant.length === 0 ? <Text style={styles.empty}>No data yet</Text> : byMerchant.map(m => (
+        <View key={m.key} style={styles.row}>
+          <Text style={styles.rowLabel} numberOfLines={1}>{m.key}</Text>
+          <View style={styles.rowBarWrap}>
+            <Bar pct={(m.value / maxMerchant) * 100} />
+          </View>
+          <Text style={styles.rowVal}>{fmtAmount(m.value)}</Text>
+        </View>
+      ))}
+    </Section>
+  );
+}
+
+function ByCurrencySection({ byCurrency, fmtAmount }: Readonly<{ byCurrency: ByKV; fmtAmount: (n:number)=>string }>) {
+  return (
+    <Section title="By Currency">
+      {byCurrency.length === 0 ? <Text style={styles.empty}>No data yet</Text> : byCurrency.map(c => (
+        <View key={c.key} style={styles.rowBare}>
+          <Text style={styles.rowLabel}>{c.key}</Text>
+          <Text style={styles.rowVal}>{fmtAmount(c.value)}</Text>
+        </View>
+      ))}
+    </Section>
+  );
+}
+
+function ByCategorySection({ byCategory, maxCategory, budgets, fmtAmount }: Readonly<{ byCategory: ByKV; maxCategory: number; budgets: Record<string, number>; fmtAmount: (n:number)=>string }>) {
+  return (
+    <Section title="By Category (Top)">
+      {byCategory.length === 0 ? <Text style={styles.empty}>No data yet</Text> : byCategory.map(c => (
+        <View key={c.key} style={styles.row}>
+          <Text style={styles.rowLabel} numberOfLines={1}>{c.key}</Text>
+          <View style={styles.rowBarWrap}>
+            {(() => {
+              let color: string | undefined;
+              if (budgets[c.key]) {
+                const ratio = c.value / budgets[c.key];
+                if (ratio >= 1) color = '#ef4444'; else if (ratio >= 0.8) color = '#f59e0b'; else color = '#10b981';
+              }
+              return <Bar pct={(c.value / maxCategory) * 100} color={color} />;
+            })()}
+          </View>
+          <Text style={styles.rowVal}>{fmtAmount(c.value)}</Text>
+        </View>
+      ))}
+    </Section>
+  );
 }
