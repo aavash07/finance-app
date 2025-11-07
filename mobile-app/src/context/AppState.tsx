@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { ExpoSecureStore } from '../secureStore';
 import * as base64js from 'base64-js';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 type AppState = {
   baseUrl: string; setBaseUrl: (s: string) => void;
@@ -59,7 +60,8 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
 
   useEffect(() => {
     (async () => {
-      const [sPriv, sPub, sDev, sBase, sUser, sPass, sPem, sReg, sAccess, sRefresh, sWraps, sReceipts, sBudgets] = await Promise.all([
+      // Load secrets and small values from SecureStore
+      const [sPriv, sPub, sDev, sBase, sUser, sPass, sPem, sReg, sAccess, sRefresh] = await Promise.all([
         store.get('privB64'),
         store.get('pubB64'),
         store.get('deviceId'),
@@ -70,11 +72,7 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
         store.get('registered'),
         store.get('accessToken'),
         store.get('refreshToken'),
-        store.get('dekWraps'),
-        store.get('receiptsCache'),
-        store.get('budgets'),
       ]);
-
       if (sPriv) setPrivB64(sPriv);
       if (sPub) setPubB64(sPub);
       if (sDev) setDeviceId(sDev);
@@ -82,19 +80,37 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
       if (sUser) setUsername(sUser);
       if (sPass) setPassword(sPass);
       if (sPem) setPem(sPem);
-        if (sReg) setRegistered(sReg === '1' || sReg.toLowerCase() === 'true');
-        if (sAccess) setAccessToken(sAccess);
-        if (sRefresh) setRefreshToken(sRefresh);
+      if (sReg) setRegistered(sReg === '1' || sReg.toLowerCase() === 'true');
+      if (sAccess) setAccessToken(sAccess);
+      if (sRefresh) setRefreshToken(sRefresh);
 
-      if (sWraps) {
-        try { setDekWraps(JSON.parse(sWraps)); } catch { /* ignore */ }
+      // Migration: move large JSON items from SecureStore -> AsyncStorage (one-time)
+      const migrated = await AsyncStorage.getItem('async_migrated_v1');
+      if (!migrated) {
+        const [oldWraps, oldReceipts, oldBudgets] = await Promise.all([
+          store.get('dekWraps'),
+          store.get('receiptsCache'),
+          store.get('budgets'),
+        ]);
+        if (oldWraps) await AsyncStorage.setItem('dekWraps', oldWraps);
+        if (oldReceipts) await AsyncStorage.setItem('receiptsCache', oldReceipts);
+        if (oldBudgets) await AsyncStorage.setItem('budgets', oldBudgets);
+        await AsyncStorage.setItem('async_migrated_v1', '1');
+        // Optionally clear old large values to reclaim secure storage space
+        if (oldWraps) await store.remove('dekWraps');
+        if (oldReceipts) await store.remove('receiptsCache');
+        if (oldBudgets) await store.remove('budgets');
       }
-      if (sReceipts) {
-        try { setReceipts(JSON.parse(sReceipts)); } catch { /* ignore */ }
-      }
-      if (sBudgets) {
-        try { setBudgets(JSON.parse(sBudgets) || {}); } catch { /* ignore */ }
-      }
+
+      // Load large JSON blobs from AsyncStorage
+      const [aWraps, aReceipts, aBudgets] = await Promise.all([
+        AsyncStorage.getItem('dekWraps'),
+        AsyncStorage.getItem('receiptsCache'),
+        AsyncStorage.getItem('budgets'),
+      ]);
+      if (aWraps) { try { setDekWraps(JSON.parse(aWraps)); } catch {} }
+      if (aReceipts) { try { setReceipts(JSON.parse(aReceipts)); } catch {} }
+      if (aBudgets) { try { setBudgets(JSON.parse(aBudgets) || {}); } catch {} }
     })();
   }, []);
 
@@ -173,8 +189,8 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
   const setReceiptDekWrap = async (id: number, wrap: string) => {
     setDekWraps(prev => {
       const next = { ...prev, [String(id)]: wrap };
-      // Persist asynchronously; fire and forget
-      store.set('dekWraps', JSON.stringify(next));
+      // Persist in AsyncStorage (fire and forget)
+      AsyncStorage.setItem('dekWraps', JSON.stringify(next));
       return next;
     });
   };
@@ -183,7 +199,7 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
     setReceipts(prev => {
       const key = String(id);
       const next = { ...prev, [key]: { id, data, derived, updatedAt: new Date().toISOString() } };
-      store.set('receiptsCache', JSON.stringify(next));
+      AsyncStorage.setItem('receiptsCache', JSON.stringify(next));
       return next;
     });
   };
@@ -199,7 +215,7 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
       } else {
         next[cat] = amount;
       }
-      store.set('budgets', JSON.stringify(next));
+      AsyncStorage.setItem('budgets', JSON.stringify(next));
       return next;
     });
   };
