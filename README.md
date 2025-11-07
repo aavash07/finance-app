@@ -130,3 +130,67 @@ Then restart Expo with a clean cache:
 cd mobile-app
 npx expo start -c
 ```
+
+## WSL (Ubuntu) setup
+
+Running the backend inside WSL is recommended on Windows. Here’s a quick path:
+
+1) Prereqs inside WSL
+- Python 3.11 or 3.12 (recommended)
+- pip and venv: `sudo apt update && sudo apt install -y python3-venv python3-pip`
+- Docker Desktop for Windows with WSL integration enabled (for Postgres/Redis via Docker Compose)
+
+2) Start Postgres and Redis (in the repo root inside WSL)
+
+```bash
+docker compose up -d
+```
+
+This launches Postgres on 5432 and Redis on 6379. The defaults in `.env` and `settings.py` already point to these.
+
+3) Create venv and install
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+4) Env and migrations
+
+Create `.env` (copy from `.env.example`) and ensure DB_ vars match docker-compose values. Then:
+
+```bash
+python manage.py migrate
+python manage.py createsuperuser
+```
+
+5) Run the server
+
+```bash
+python manage.py runserver 0.0.0.0:8000
+```
+
+From Windows, you can hit it at `http://localhost:8000`. From the Android emulator in Expo, use `http://10.0.2.2:8000` (the mobile app defaults to this).
+
+Note: If you prefer SQLite for quick experiments, set `DB_ENGINE=sqlite` in `.env` (not recommended for Postgres features, but handy for fast local runs). No changes are needed when using Docker Postgres in WSL.
+
+### Makefile shortcuts (WSL)
+
+Common tasks via `make`:
+
+```bash
+# Start/stop services
+make db-up
+make db-down
+
+# One-time setup
+make install      # creates .venv and installs requirements
+make migrate      # apply migrations
+make superuser    # create admin user
+
+# Dev loop
+make run          # runserver 0.0.0.0:8000
+make test         # run tests
+```
