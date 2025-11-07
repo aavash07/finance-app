@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, Button, Alert } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, Pressable } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { FinanceKitClient, generateDEK, mintGrantJWT, rsaOaepWrapDek } from '@financekit/rn-sdk';
 import { useAppState } from '../context/AppState';
 import { useNavigation } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 
 type Receipt = { id: number; merchant?: string; total?: number; purchased_at?: string };
 
@@ -66,29 +67,52 @@ export default function ReceiptsScreen() {
     }
   };
 
+  const isEmpty = !loading && items.length === 0;
+
   return (
     <View style={styles.c}>
-      <View style={styles.row}><Button title="Pick & Ingest" onPress={onPickAndIngest} /></View>
-      <FlatList
-        data={items}
-        refreshing={loading}
-        onRefresh={load}
-        keyExtractor={x => String(x.id)}
-        renderItem={({ item }) => (
-          <TouchableOpacity onPress={() => navigation.navigate('ReceiptDetail', { id: item.id })} style={styles.item}>
-            <Text style={styles.m}>{item.merchant || 'Unknown'}</Text>
-            <Text>{item.total == null ? '' : `$${item.total}`}</Text>
-            <Text>{item.purchased_at || ''}</Text>
-          </TouchableOpacity>
-        )}
-      />
+      {isEmpty ? (
+        <View style={styles.empty}>
+          <Ionicons name="document-text-outline" size={72} color="#94a3b8" />
+          <Text style={styles.emptyTitle}>No receipts yet</Text>
+          <Text style={styles.emptyText}>Tap the + button to ingest your first receipt.</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={items}
+          refreshing={loading}
+          onRefresh={load}
+          keyExtractor={x => String(x.id)}
+          renderItem={({ item }) => (
+            <TouchableOpacity onPress={() => navigation.navigate('ReceiptDetail', { id: item.id })} style={styles.item}>
+              <Text style={styles.m}>{item.merchant || 'Unknown'}</Text>
+              <Text>{item.total == null ? '' : `$${item.total}`}</Text>
+              <Text>{item.purchased_at || ''}</Text>
+            </TouchableOpacity>
+          )}
+        />
+      )}
+
+      {/* Floating Action Button */}
+      <Pressable accessibilityRole="button" accessibilityLabel="Pick and ingest receipt" onPress={onPickAndIngest} style={styles.fab}>
+        <Ionicons name="add" size={28} color="#fff" />
+      </Pressable>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   c: { flex: 1, padding: 12 },
-  row: { marginVertical: 6 },
   item: { paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#ddd' },
-  m: { fontWeight: '600' }
+  m: { fontWeight: '600' },
+  fab: {
+    position: 'absolute', right: 20, bottom: 24,
+    backgroundColor: '#4f46e5', height: 56, width: 56, borderRadius: 28,
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 6, shadowOffset: { width: 0, height: 3 },
+    elevation: 4,
+  },
+  empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  emptyTitle: { marginTop: 12, fontSize: 18, fontWeight: '700', color: '#334155' },
+  emptyText: { marginTop: 6, color: '#64748b' },
 });
