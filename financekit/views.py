@@ -2,6 +2,7 @@ import base64, json, secrets
 from django.utils import timezone
 from django.contrib.auth.models import User
 from rest_framework import permissions, status, generics
+from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle, ScopedRateThrottle
@@ -22,6 +23,9 @@ from .crypto_utils import (
 )
 
 from .serializers import IngestReceiptSerializer, ReceiptSerializer
+from .serializers import RegisterSerializer
+from rest_framework import serializers
+from rest_framework_simplejwt.tokens import RefreshToken
 from .ocr_adapter import parse_image_to_json
 from .crypto_utils import aesgcm_encrypt
 from django.http import JsonResponse
@@ -511,6 +515,24 @@ class AnalyticsSpendView(APIView):
             ],
             "daily": daily,
         })
+
+
+class RegisterView(APIView):
+    """Register a new user and return JWT tokens."""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        s = RegisterSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        user = s.save()
+        # issue tokens
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            "user_id": user.id,
+            "username": user.username,
+            "access": str(refresh.access_token),
+            "refresh": str(refresh),
+        }, status=201)
     
     
     

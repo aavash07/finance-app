@@ -9,7 +9,9 @@ from .views import (
     AnalyticsSpendView,
     DevMintTokenView,          # NEW
     DevWrapDekView,            # NEW
+    RegisterView,
 )
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 urlpatterns = [
     path("crypto/server-public-key", ServerPubKeyView.as_view()),
@@ -18,6 +20,10 @@ urlpatterns = [
     path("dev/create-receipt", DevCreateEncryptedReceiptView.as_view()),  # existing dev helper
     path("ingest/receipt", IngestReceiptView.as_view()),
     path("analytics/spend", AnalyticsSpendView.as_view()),
+    # Auth endpoints
+    path("auth/register", RegisterView.as_view()),
+    path("auth/token", TokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path("auth/token/refresh", TokenRefreshView.as_view(), name='token_refresh'),
 ]
 
 # Gate dev-only helpers behind a setting (on by default in dev)

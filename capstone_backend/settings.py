@@ -64,9 +64,12 @@ STATIC_URL = "static/"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# DRF auth for dev (BasicAuth + Session)
+from datetime import timedelta
+
+# DRF auth for dev (BasicAuth + Session + JWT)
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
         "rest_framework.authentication.BasicAuthentication",
         "rest_framework.authentication.SessionAuthentication",
     ],
@@ -86,6 +89,16 @@ REST_FRAMEWORK = {
         "ingest": os.getenv("THROTTLE_RATE_INGEST", "10/min"),
         "decrypt": os.getenv("THROTTLE_RATE_DECRYPT", "20/min"),
     },
+}
+
+# Simple JWT configuration
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=int(os.getenv('JWT_ACCESS_MINUTES', '15'))),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=int(os.getenv('JWT_REFRESH_DAYS', '7'))),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': False,
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': os.getenv('SECRET_KEY', SECRET_KEY),
 }
 
 # RSA key paths

@@ -11,6 +11,7 @@ type AppState = {
   privB64: string; setPrivB64: (s: string) => void;
   pem: string; setPem: (s: string) => void;
   registered: boolean; setRegistered: (b: boolean) => Promise<void>;
+  accessToken?: string | null; refreshToken?: string | null; setTokens?: (a: string|null, r: string|null)=>Promise<void>;
   authHeaders: Record<string, string>;
   save: (obj: Partial<Record<'baseUrl'|'username'|'password'|'deviceId'|'pubB64'|'privB64'|'pem'|'registered', string>>) => Promise<void>;
   dekWraps: Record<string, string>;
@@ -46,13 +47,15 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
   const [privB64, setPrivB64] = useState('');
   const [pem, setPem] = useState('');
   const [registered, setRegistered] = useState(false);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [refreshToken, setRefreshToken] = useState<string | null>(null);
   const [dekWraps, setDekWraps] = useState<Record<string, string>>({});
   const [receipts, setReceipts] = useState<Record<string, { id: number; data?: any; derived?: any; updatedAt: string }>>({});
   const [budgets, setBudgets] = useState<Record<string, number>>({});
 
   useEffect(() => {
     (async () => {
-      const [sPriv, sPub, sDev, sBase, sUser, sPass, sPem, sReg, sWraps, sReceipts, sBudgets] = await Promise.all([
+      const [sPriv, sPub, sDev, sBase, sUser, sPass, sPem, sReg, sAccess, sRefresh, sWraps, sReceipts, sBudgets] = await Promise.all([
         store.get('privB64'),
         store.get('pubB64'),
         store.get('deviceId'),
@@ -61,6 +64,8 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
         store.get('password'),
         store.get('pem'),
         store.get('registered'),
+        store.get('accessToken'),
+        store.get('refreshToken'),
         store.get('dekWraps'),
         store.get('receiptsCache'),
         store.get('budgets'),
@@ -73,7 +78,9 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
       if (sUser) setUsername(sUser);
       if (sPass) setPassword(sPass);
       if (sPem) setPem(sPem);
-      if (sReg) setRegistered(sReg === '1' || sReg.toLowerCase() === 'true');
+        if (sReg) setRegistered(sReg === '1' || sReg.toLowerCase() === 'true');
+        if (sAccess) setAccessToken(sAccess);
+        if (sRefresh) setRefreshToken(sRefresh);
 
       if (sWraps) {
         try { setDekWraps(JSON.parse(sWraps)); } catch { /* ignore */ }
@@ -87,7 +94,10 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
     })();
   }, []);
 
-  const authHeaders = useMemo(() => ({ Authorization: `Basic ${toB64Ascii(username + ':' + password)}` }), [username, password]);
+  const authHeaders = useMemo(() => {
+    if (accessToken) return { Authorization: `Bearer ${accessToken}` };
+    return { Authorization: `Basic ${toB64Ascii(username + ':' + password)}` };
+  }, [username, password, accessToken]);
 
   const save = async (obj: Partial<Record<'baseUrl'|'username'|'password'|'deviceId'|'pubB64'|'privB64'|'pem'|'registered', string>>) => {
     await Promise.all(Object.entries(obj).map(([k, v]) => store.set(k, v || '')));
@@ -99,6 +109,15 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
     if (obj.privB64 !== undefined) setPrivB64(obj.privB64);
     if (obj.pem !== undefined) setPem(obj.pem);
     if (obj.registered !== undefined) setRegistered(obj.registered === '1' || obj.registered.toLowerCase() === 'true');
+  };
+
+  const setTokens = async (access: string | null, refresh: string | null) => {
+    setAccessToken(access);
+    setRefreshToken(refresh);
+    await Promise.all([
+      store.set('accessToken', access || ''),
+      store.set('refreshToken', refresh || ''),
+    ]);
   };
 
   const markRegistered = async (b: boolean) => {
@@ -140,7 +159,7 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
     });
   };
 
-  const value = useMemo<AppState>(() => ({ baseUrl, setBaseUrl, username, setUsername, password, setPassword, deviceId, setDeviceId, pubB64, setPubB64, privB64, setPrivB64, pem, setPem, registered, setRegistered: markRegistered, authHeaders, save, dekWraps, setReceiptDekWrap, receipts, setReceiptData, budgets, setBudget }), [baseUrl, username, password, deviceId, pubB64, privB64, pem, registered, authHeaders, dekWraps, receipts, budgets]);
+  const value = useMemo<AppState>(() => ({ baseUrl, setBaseUrl, username, setUsername, password, setPassword, deviceId, setDeviceId, pubB64, setPubB64, privB64, setPrivB64, pem, setPem, registered, setRegistered: markRegistered, authHeaders, save, dekWraps, setReceiptDekWrap, receipts, setReceiptData, budgets, setBudget, accessToken, refreshToken, setTokens }), [baseUrl, username, password, deviceId, pubB64, privB64, pem, registered, authHeaders, dekWraps, receipts, budgets, accessToken, refreshToken]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

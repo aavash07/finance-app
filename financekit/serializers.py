@@ -61,3 +61,24 @@ class DevMintTokenSerializer(serializers.Serializer):
 class DevWrapDekSerializer(serializers.Serializer):
     # nothing required; included for symmetry / future params
     dummy = serializers.BooleanField(required=False, default=False)
+
+
+class RegisterSerializer(serializers.Serializer):
+    username = serializers.CharField(max_length=150)
+    password = serializers.CharField(write_only=True, min_length=6)
+    email = serializers.EmailField(required=False, allow_blank=True)
+
+    def validate_username(self, value):
+        from django.contrib.auth.models import User
+        if User.objects.filter(username=value).exists():
+            raise serializers.ValidationError("Username already taken")
+        return value
+
+    def create(self, validated_data):
+        from django.contrib.auth.models import User
+        user = User.objects.create_user(
+            username=validated_data["username"],
+            email=validated_data.get("email", ""),
+            password=validated_data["password"],
+        )
+        return user
