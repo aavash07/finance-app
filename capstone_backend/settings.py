@@ -43,16 +43,26 @@ TEMPLATES = [{
 
 WSGI_APPLICATION = "capstone_backend.wsgi.application"
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.getenv("DB_NAME","capstone"),
-        "USER": os.getenv("DB_USER","capstone"),
-        "PASSWORD": os.getenv("DB_PASSWORD","capstone"),
-        "HOST": os.getenv("DB_HOST","localhost"),
-        "PORT": os.getenv("DB_PORT","5432"),
+# Database config: Postgres by default; allow opting into SQLite for local/dev/tests
+DB_ENGINE = os.getenv("DB_ENGINE", "postgresql").lower()
+if DB_ENGINE == "sqlite":
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": os.path.join(BASE_DIR, "db.sqlite3"),
+        }
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": os.getenv("DB_NAME","capstone"),
+            "USER": os.getenv("DB_USER","capstone"),
+            "PASSWORD": os.getenv("DB_PASSWORD","capstone"),
+            "HOST": os.getenv("DB_HOST","localhost"),
+            "PORT": os.getenv("DB_PORT","5432"),
+        }
+    }
 
 AUTH_PASSWORD_VALIDATORS = []
 LANGUAGE_CODE = "en-us"
