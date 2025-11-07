@@ -2,17 +2,13 @@ import React, { useCallback } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import ReceiptsScreen from '../screens/ReceiptsScreen';
 import AnalyticsScreen from '../screens/AnalyticsScreen';
-import DeviceSetupScreen from '../screens/DeviceSetupScreen';
-import SettingsScreen from '../screens/SettingsScreen';
-import AccountScreen from '../screens/AccountScreen';
+import AccountStack from './AccountStack';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 export type TabsParamList = {
   ReceiptsTab: undefined;
   AnalyticsTab: undefined;
-  DeviceTab: undefined;
-  SettingsTab: undefined;
-  AccountTab: undefined;
+  AccountTab: undefined; // nested stack with account/settings/device
 };
 
 const Tab = createBottomTabNavigator<TabsParamList>();
@@ -26,12 +22,6 @@ export default function MainTabs() {
         break;
       case 'AnalyticsTab':
         icon = focused ? 'stats-chart' : 'stats-chart-outline';
-        break;
-      case 'DeviceTab':
-        icon = focused ? 'hardware-chip' : 'hardware-chip-outline';
-        break;
-      case 'SettingsTab':
-        icon = focused ? 'settings' : 'settings-outline';
         break;
       case 'AccountTab':
         icon = focused ? 'person-circle' : 'person-circle-outline';
@@ -48,9 +38,7 @@ export default function MainTabs() {
     >
       <Tab.Screen name="ReceiptsTab" component={ReceiptsScreen} options={{ title: 'Receipts' }} />
       <Tab.Screen name="AnalyticsTab" component={AnalyticsScreen} options={{ title: 'Analytics' }} />
-      <Tab.Screen name="DeviceTab" component={DeviceSetupScreen} options={{ title: 'Device' }} />
-      <Tab.Screen name="SettingsTab" component={SettingsScreen} options={{ title: 'Settings' }} />
-      <Tab.Screen name="AccountTab" component={AccountScreen} options={{ title: 'Account' }} />
+  <Tab.Screen name="AccountTab" component={AccountStack} options={{ title: 'Account' }} />
     </Tab.Navigator>
   );
 }
