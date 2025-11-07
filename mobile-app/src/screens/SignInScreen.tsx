@@ -4,10 +4,10 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useAppState } from '../context/AppState';
-import { FinanceKitClient, generateEd25519Keypair } from '@financekit/rn-sdk';
+// No direct provisioning here; we navigate to a provisioning screen after auth
 
 export default function SignInScreen() {
-  const { baseUrl, setTokens, setUsername, setPassword, setDeviceId, setPubB64, setPrivB64, setPem, setRegistered, fetchWithAuth } = useAppState() as any;
+  const { baseUrl, setTokens, setUsername, setPassword } = useAppState() as any;
   const [user, setUser] = useState('');
   const [pass, setPass] = useState('');
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
@@ -22,27 +22,12 @@ export default function SignInScreen() {
         const txt = await res.text();
         throw new Error(txt || res.statusText);
       }
-  const j = await res.json();
-  await setTokens(j.access, j.refresh);
+      const j = await res.json();
+      await setTokens(j.access, j.refresh);
       setUsername(user);
       setPassword(pass);
-      // Auto device setup
-  const client = new FinanceKitClient(baseUrl, fetchWithAuth);
-      const rand = new Uint8Array(8); crypto.getRandomValues(rand);
-      const hex = Array.from(rand).map(b => b.toString(16).padStart(2, '0')).join('');
-      const deviceId = `device-${hex}`;
-      const kp = await generateEd25519Keypair();
-      await Promise.all([
-        setDeviceId?.(deviceId),
-        setPubB64?.(kp.publicKeyB64),
-        setPrivB64?.(kp.privateKeyB64),
-      ]);
-  const authHeaders = { Authorization: `Bearer ${j.access}` };
-  const pk = await client.getServerPublicKey(authHeaders);
-      await setPem?.(pk.pem);
-  await client.registerDevice(deviceId, kp.publicKeyB64, authHeaders);
-      await setRegistered?.(true);
-  nav.reset({ index: 0, routes: [{ name: 'MainTabs' }] });
+      // Show provisioning screen to handle device setup with a loading UI
+      nav.reset({ index: 0, routes: [{ name: 'Provisioning' }] });
     } catch (e: any) {
       Alert.alert('Sign in failed', e?.message || 'Unknown error');
     }

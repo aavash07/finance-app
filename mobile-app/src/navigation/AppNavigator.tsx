@@ -5,11 +5,13 @@ import ReceiptDetailScreen from '../screens/ReceiptDetailScreen';
 import MainTabs from './MainTabs';
 import SignInScreen from '../screens/SignInScreen';
 import SignUpScreen from '../screens/SignUpScreen';
+import ProvisioningScreen from '../screens/ProvisioningScreen';
 import { useAppState } from '../context/AppState';
 
 export type RootStackParamList = {
   SignIn: undefined;
   SignUp: undefined;
+  Provisioning: undefined;
   MainTabs: undefined;
   ReceiptDetail: { id: number };
 };
@@ -35,6 +37,7 @@ export default function AppNavigator() {
   <Stack.Navigator initialRouteName="SignIn">
     <Stack.Screen name="SignIn" component={SignInScreen} options={{ headerShown: false }} />
     <Stack.Screen name="SignUp" component={SignUpScreen} options={{ headerShown: false }} />
+        <Stack.Screen name="Provisioning" component={ProvisioningScreen} options={{ headerShown: false }} />
         <Stack.Screen name="MainTabs" component={MainTabs} options={{ headerShown: false }} />
         <Stack.Screen name="ReceiptDetail" component={ReceiptDetailScreen} options={{ title: 'Receipt' }} />
       </Stack.Navigator>

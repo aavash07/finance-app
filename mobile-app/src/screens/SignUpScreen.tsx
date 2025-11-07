@@ -4,10 +4,9 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useAppState } from '../context/AppState';
-import { FinanceKitClient, generateEd25519Keypair } from '@financekit/rn-sdk';
 
 export default function SignUpScreen() {
-  const { baseUrl, setTokens, setUsername, setPassword, setDeviceId, setPubB64, setPrivB64, setPem, setRegistered, fetchWithAuth } = useAppState() as any;
+  const { baseUrl, setTokens, setUsername, setPassword } = useAppState() as any;
   const [user, setUser] = useState('');
   const [pass, setPass] = useState('');
   const [email, setEmail] = useState('');
@@ -28,25 +27,8 @@ export default function SignUpScreen() {
       await setTokens?.(data.access, data.refresh);
       await setUsername(user);
       await setPassword(pass);
-      // Kick off device setup: generate device id + keys, fetch server PEM, register device
-  const client = new FinanceKitClient(baseUrl, fetchWithAuth);
-      const rand = new Uint8Array(8); crypto.getRandomValues(rand);
-      const hex = Array.from(rand).map(b => b.toString(16).padStart(2, '0')).join('');
-      const deviceId = `device-${hex}`;
-      const kp = await generateEd25519Keypair();
-      // Save locally first
-      await Promise.all([
-        setDeviceId?.(deviceId),
-        setPubB64?.(kp.publicKeyB64),
-        setPrivB64?.(kp.privateKeyB64),
-      ]);
-      // Fetch PEM and register
-      const authHeaders = { Authorization: `Bearer ${data.access}` };
-      const pk = await client.getServerPublicKey(authHeaders);
-      await setPem?.(pk.pem);
-      await client.registerDevice(deviceId, kp.publicKeyB64, authHeaders);
-      await setRegistered?.(true);
-      nav.reset({ index: 0, routes: [{ name: 'MainTabs' }] });
+      // Navigate to provisioning screen to complete device setup with a loading UI
+      nav.reset({ index: 0, routes: [{ name: 'Provisioning' }] });
     } catch (e: any) {
       Alert.alert('Sign up failed', e?.message || 'Unknown error');
     }
