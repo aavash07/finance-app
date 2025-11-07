@@ -5,39 +5,42 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useAppState } from '../context/AppState';
 
-export default function SignInScreen() {
+export default function SignUpScreen() {
   const { baseUrl, setTokens, setUsername, setPassword } = useAppState() as any;
   const [user, setUser] = useState('');
   const [pass, setPass] = useState('');
+  const [email, setEmail] = useState('');
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
-  const onSignIn = async () => {
+  const onSignUp = async () => {
     try {
-      const res = await fetch(`${baseUrl}/api/v1/auth/token`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: user, password: pass })
+      const res = await fetch(`${baseUrl}/api/v1/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: user, password: pass, email: email || undefined }),
       });
       if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt || res.statusText);
+        const t = await res.text();
+        throw new Error(t || `HTTP ${res.status}`);
       }
-      const j = await res.json();
-      await setTokens(j.access, j.refresh);
-      setUsername(user);
-      setPassword(pass);
-  nav.reset({ index: 0, routes: [{ name: 'MainTabs' }] });
+      const data = await res.json();
+      await setTokens?.(data.access, data.refresh);
+      await setUsername(user);
+      await setPassword(pass);
+      nav.reset({ index: 0, routes: [{ name: 'MainTabs' }] });
     } catch (e: any) {
-      Alert.alert('Sign in failed', e?.message || 'Unknown error');
+      Alert.alert('Sign up failed', e?.message || 'Unknown error');
     }
   };
 
   return (
     <View style={styles.c}>
-      <Text style={styles.title}>Sign in</Text>
+      <Text style={styles.title}>Create an account</Text>
       <TextInput placeholder="Username" value={user} onChangeText={setUser} style={styles.input} autoCapitalize="none" />
+      <TextInput placeholder="Email (optional)" value={email} onChangeText={setEmail} style={styles.input} autoCapitalize="none" />
       <TextInput placeholder="Password" value={pass} onChangeText={setPass} style={styles.input} secureTextEntry />
-      <Pressable onPress={onSignIn} style={styles.btn}><Text style={styles.btnText}>Sign in</Text></Pressable>
-      <Pressable onPress={() => nav.navigate('SignUp')} style={styles.link}><Text style={styles.linkText}>New here? Create an account</Text></Pressable>
+      <Pressable onPress={onSignUp} style={styles.btn}><Text style={styles.btnText}>Sign up</Text></Pressable>
+      <Pressable onPress={() => nav.navigate('SignIn')} style={styles.link}><Text style={styles.linkText}>Have an account? Sign in</Text></Pressable>
     </View>
   );
 }
@@ -46,7 +49,7 @@ const styles = StyleSheet.create({
   c: { flex: 1, padding: 16, justifyContent: 'center' },
   title: { fontSize: 20, fontWeight: '700', marginBottom: 12 },
   input: { backgroundColor: '#fff', padding: 10, borderRadius: 8, marginBottom: 10, borderWidth: StyleSheet.hairlineWidth, borderColor: '#cbd5e1' },
-  btn: { backgroundColor: '#4f46e5', padding: 12, borderRadius: 8, alignItems: 'center' },
+  btn: { backgroundColor: '#4f46e5', padding: 12, borderRadius: 8, alignItems: 'center', marginTop: 4 },
   btnText: { color: '#fff', fontWeight: '700' },
   link: { marginTop: 10, alignItems: 'center' },
   linkText: { color: '#4f46e5', fontWeight: '600' },
