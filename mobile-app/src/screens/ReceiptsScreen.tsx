@@ -9,15 +9,15 @@ type Receipt = { id: number; merchant?: string; total?: number; purchased_at?: s
 
 export default function ReceiptsScreen() {
   const navigation = useNavigation<any>();
-  const { baseUrl, authHeaders, deviceId, pem, privB64, setReceiptDekWrap, receipts, setReceiptData } = useAppState();
-  const api = useMemo(() => new FinanceKitClient(baseUrl), [baseUrl]);
+  const { baseUrl, authHeaders, deviceId, pem, privB64, setReceiptDekWrap, receipts, setReceiptData, fetchWithAuth } = useAppState();
+  const api = useMemo(() => new FinanceKitClient(baseUrl, fetchWithAuth), [baseUrl, fetchWithAuth]);
   const [items, setItems] = useState<Receipt[]>([]);
   const [loading, setLoading] = useState(false);
 
   const load = async () => {
     setLoading(true);
     try {
-      const r = await fetch(`${baseUrl.replace(/\/$/, '')}/api/v1/receipts`, { headers: authHeaders });
+  const r = await fetchWithAuth(`${baseUrl.replace(/\/$/, '')}/api/v1/receipts`, { headers: authHeaders });
       const body = await r.json();
       if (!r.ok) throw body;
       setItems(body.results || body.items || []);
@@ -50,7 +50,7 @@ export default function ReceiptsScreen() {
       const dek_wrap_srv = rsaOaepWrapDek(pem, dek);
       const now = Math.floor(Date.now() / 1000);
       const token = await mintGrantJWT(deviceId, privB64, { sub: '1', scope: ['receipt:ingest'], jti: String(now), iat: now, nbf: now - 5, exp: now + 120 });
-      const resp: any = await api.ingestReceipt({ token, dek_wrap_srv, year: new Date().getFullYear(), month: new Date().getMonth() + 1, category: 'Uncategorized', image, authHeaders });
+  const resp: any = await api.ingestReceipt({ token, dek_wrap_srv, year: new Date().getFullYear(), month: new Date().getMonth() + 1, category: 'Uncategorized', image, authHeaders });
       if (resp.receipt_id) {
         const merch = resp?.derived?.merchant || resp?.data?.merchant || 'Receipt';
         const total = resp?.derived?.total || resp?.data?.total || '';

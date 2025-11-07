@@ -3,13 +3,14 @@ import { View, Text, TextInput, Button, StyleSheet, ScrollView } from 'react-nat
 import { useAppState } from '../context/AppState';
  
 export default function SettingsScreen() {
-  const { baseUrl, username, password, deviceId, save } = useAppState();
+  const { baseUrl, username, password, deviceId, save, logout } = useAppState();
   const [b, setB] = useState(baseUrl);
   const [u, setU] = useState(username);
   const [p, setP] = useState(password);
   const [d, setD] = useState(deviceId);
 
   const onSave = async () => { await save({ baseUrl: b, username: u, password: p, deviceId: d }); };
+  const onLogout = async () => { await logout(); };
 
   return (
     <ScrollView contentContainerStyle={styles.c}>
@@ -23,6 +24,7 @@ export default function SettingsScreen() {
       <Text>Device ID</Text>
       <TextInput style={styles.i} value={d} onChangeText={setD} />
       <View style={styles.row}><Button title="Save" onPress={onSave} /></View>
+      <View style={styles.row}><Button title="Log out" color="#dc2626" onPress={onLogout} /></View>
   {/* Device Setup and Receipts are available via bottom tabs now */}
     </ScrollView>
   );

@@ -13,6 +13,9 @@ type AppState = {
   registered: boolean; setRegistered: (b: boolean) => Promise<void>;
   accessToken?: string | null; refreshToken?: string | null; setTokens?: (a: string|null, r: string|null)=>Promise<void>;
   authHeaders: Record<string, string>;
+  fetchWithAuth: (url: string, init?: RequestInit) => Promise<Response>;
+  logout: () => Promise<void>;
+  setOnAuthFailure: (cb: (() => void) | null) => void;
   save: (obj: Partial<Record<'baseUrl'|'username'|'password'|'deviceId'|'pubB64'|'privB64'|'pem'|'registered', string>>) => Promise<void>;
   dekWraps: Record<string, string>;
   setReceiptDekWrap: (id: number, wrap: string) => Promise<void>;
@@ -52,6 +55,7 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
   const [dekWraps, setDekWraps] = useState<Record<string, string>>({});
   const [receipts, setReceipts] = useState<Record<string, { id: number; data?: any; derived?: any; updatedAt: string }>>({});
   const [budgets, setBudgets] = useState<Record<string, number>>({});
+  const [onAuthFailure, setOnAuthFailure] = useState<(() => void) | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -99,6 +103,41 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
     return { Authorization: `Basic ${toB64Ascii(username + ':' + password)}` };
   }, [username, password, accessToken]);
 
+  // Wrapper around fetch that injects Authorization and refreshes tokens on 401
+  const fetchWithAuth = React.useCallback(async (url: string, init?: RequestInit) => {
+    const headers = new Headers(init?.headers as any);
+    // Only inject if not explicitly provided
+    if (!headers.has('Authorization')) {
+      if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
+      else headers.set('Authorization', `Basic ${toB64Ascii(username + ':' + password)}`);
+    }
+    let res = await fetch(url, { ...init, headers });
+    if (res.status !== 401 || !refreshToken) return res;
+    // Attempt refresh
+    try {
+      const r = await fetch(`${baseUrl.replace(/\/$/, '')}/api/v1/auth/token/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh: refreshToken }),
+      });
+      if (!r.ok) {
+        // Refresh failed – log out and notify
+        await logout();
+        return res; // give original 401 back
+      }
+      const data = await r.json();
+      // Update tokens and retry once
+      await setTokens?.(data.access, data.refresh ?? refreshToken);
+      const retryHeaders = new Headers(init?.headers as any);
+      retryHeaders.set('Authorization', `Bearer ${data.access}`);
+      res = await fetch(url, { ...init, headers: retryHeaders });
+      return res;
+    } catch {
+      await logout();
+      return res;
+    }
+  }, [accessToken, refreshToken, username, password, baseUrl]);
+
   const save = async (obj: Partial<Record<'baseUrl'|'username'|'password'|'deviceId'|'pubB64'|'privB64'|'pem'|'registered', string>>) => {
     await Promise.all(Object.entries(obj).map(([k, v]) => store.set(k, v || '')));
     if (obj.baseUrl !== undefined) setBaseUrl(obj.baseUrl);
@@ -118,6 +157,12 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
       store.set('accessToken', access || ''),
       store.set('refreshToken', refresh || ''),
     ]);
+  };
+
+  const logout = async () => {
+    await setTokens(null, null);
+    await markRegistered(false);
+    onAuthFailure?.();
   };
 
   const markRegistered = async (b: boolean) => {
@@ -159,7 +204,7 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
     });
   };
 
-  const value = useMemo<AppState>(() => ({ baseUrl, setBaseUrl, username, setUsername, password, setPassword, deviceId, setDeviceId, pubB64, setPubB64, privB64, setPrivB64, pem, setPem, registered, setRegistered: markRegistered, authHeaders, save, dekWraps, setReceiptDekWrap, receipts, setReceiptData, budgets, setBudget, accessToken, refreshToken, setTokens }), [baseUrl, username, password, deviceId, pubB64, privB64, pem, registered, authHeaders, dekWraps, receipts, budgets, accessToken, refreshToken]);
+  const value = useMemo<AppState>(() => ({ baseUrl, setBaseUrl, username, setUsername, password, setPassword, deviceId, setDeviceId, pubB64, setPubB64, privB64, setPrivB64, pem, setPem, registered, setRegistered: markRegistered, authHeaders, fetchWithAuth, logout, setOnAuthFailure, save, dekWraps, setReceiptDekWrap, receipts, setReceiptData, budgets, setBudget, accessToken, refreshToken, setTokens }), [baseUrl, username, password, deviceId, pubB64, privB64, pem, registered, authHeaders, fetchWithAuth, logout, setOnAuthFailure, dekWraps, receipts, budgets, accessToken, refreshToken]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
