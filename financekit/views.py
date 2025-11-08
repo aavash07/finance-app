@@ -436,12 +436,16 @@ class ReceiptListView(generics.ListAPIView):
             qs = qs.filter(merchant__icontains=merch)
         return qs.order_by("-created_at")
 
-class ReceiptDetailView(generics.RetrieveAPIView):
+class ReceiptDetailView(generics.RetrieveDestroyAPIView):
     serializer_class = ReceiptSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         return Receipt.objects.filter(user=self.request.user)
+
+    def perform_destroy(self, instance: Receipt):
+        # Cascade delete of items handled by FK; add any audit/event hooks here if needed.
+        instance.delete()
 
 
 class AnalyticsSpendView(APIView):

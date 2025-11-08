@@ -1,5 +1,6 @@
 import React from 'react';
 import { SafeAreaView, StyleSheet } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import Constants from 'expo-constants';
 import { AppStateProvider } from './context/AppState';
 import AppNavigator from './navigation/AppNavigator';
@@ -11,11 +12,13 @@ export default function App() {
   });
   if (!fontsLoaded) return null;
   return (
-    <SafeAreaView style={styles.container}>
-      <AppStateProvider>
-        <AppNavigator />
-      </AppStateProvider>
-    </SafeAreaView>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaView style={styles.container}>
+        <AppStateProvider>
+          <AppNavigator />
+        </AppStateProvider>
+      </SafeAreaView>
+    </GestureHandlerRootView>
   );
 }
 

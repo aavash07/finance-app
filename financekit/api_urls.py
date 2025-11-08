@@ -10,6 +10,8 @@ from .views import (
     DevMintTokenView,          # NEW
     DevWrapDekView,            # NEW
     RegisterView,
+    ReceiptListView,
+    ReceiptDetailView,
 )
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
@@ -20,6 +22,8 @@ urlpatterns = [
     path("dev/create-receipt", DevCreateEncryptedReceiptView.as_view()),  # existing dev helper
     path("ingest/receipt", IngestReceiptView.as_view()),
     path("analytics/spend", AnalyticsSpendView.as_view()),
+    path("receipts", ReceiptListView.as_view()),
+    path("receipts/<int:pk>", ReceiptDetailView.as_view()),
     # Auth endpoints
     path("auth/register", RegisterView.as_view()),
     path("auth/token", TokenObtainPairView.as_view(), name='token_obtain_pair'),

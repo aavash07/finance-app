@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, Pressable } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, Pressable, Animated, Easing } from 'react-native';
+import { Swipeable } from 'react-native-gesture-handler';
 import * as ImagePicker from 'expo-image-picker';
 import { FinanceKitClient, generateDEK, mintGrantJWT, rsaOaepWrapDek } from '@financekit/rn-sdk';
 import { useAppState } from '../context/AppState';
@@ -10,9 +11,10 @@ type Receipt = { id: number; merchant?: string; total?: number; purchased_at?: s
 
 export default function ReceiptsScreen() {
   const navigation = useNavigation<any>();
-  const { baseUrl, authHeaders, deviceId, pem, privB64, setReceiptDekWrap, receipts, setReceiptData, fetchWithAuth } = useAppState();
+  const { baseUrl, authHeaders, deviceId, pem, privB64, setReceiptDekWrap, receipts, setReceiptData, fetchWithAuth, removeReceipt } = useAppState();
   const api = useMemo(() => new FinanceKitClient(baseUrl, fetchWithAuth), [baseUrl, fetchWithAuth]);
   const [items, setItems] = useState<Receipt[]>([]);
+  const itemsRef = useRef(items);
   const [loading, setLoading] = useState(false);
 
   const load = async () => {
@@ -40,6 +42,79 @@ export default function ReceiptsScreen() {
   };
 
   useEffect(() => { load(); }, [baseUrl]);
+  useEffect(() => { itemsRef.current = items; }, [items]);
+
+  // Pending (soft) deletions with undo window
+  const [pending, setPending] = useState<{ id: number; merchant: string; timer: any }[]>([]);
+  const pendingRef = useRef(pending);
+  useEffect(() => { pendingRef.current = pending; }, [pending]);
+  const UNDO_MS = 5000;
+  // Animated countdown progress (0 -> 1 over UNDO_MS)
+  const progressAnim = useRef(new Animated.Value(0)).current;
+  const startProgress = () => {
+    progressAnim.setValue(0);
+    Animated.timing(progressAnim, { toValue: 1, duration: UNDO_MS, easing: Easing.linear, useNativeDriver: false }).start();
+  };
+  const scheduleDeletion = (id: number) => {
+    const target = items.find(x => x.id === id);
+    if (!target) return;
+    // Optimistically remove from list
+    setItems(itemsRef.current.filter(x => x.id !== id));
+    // Start countdown animation
+    startProgress();
+    // Set timer to finalize
+    const timer = setTimeout(async () => {
+      let ok = false;
+      try {
+        const r = await fetchWithAuth(`${baseUrl.replace(/\/$/, '')}/api/v1/receipts/${id}`, { method: 'DELETE', headers: authHeaders });
+        ok = r.status === 204 || r.status === 200;
+        if (ok) await removeReceipt(id);
+        else {
+          const body = await r.text();
+          Alert.alert('Error', body || 'Failed to delete (restoring)');
+        }
+      } catch (e: any) {
+        Alert.alert('Error', e?.message || 'Failed to delete (restoring)');
+      }
+      if (!ok) {
+        // Restore item
+        const next = [...itemsRef.current, target];
+        next.sort((a,b) => b.id - a.id);
+        setItems(next);
+      }
+      setPending(pendingRef.current.filter(x => x.id !== id));
+    }, UNDO_MS);
+    setPending([...pendingRef.current, { id, merchant: target.merchant || 'Receipt', timer }]);
+  };
+
+  const undoDelete = (id: number) => {
+    const entry = pendingRef.current.find(x => x.id === id);
+    if (entry) clearTimeout(entry.timer);
+    setPending(pendingRef.current.filter(x => x.id !== id));
+    // Restore item from local receipts cache (still present because not permanently deleted yet)
+    const rLocal = receipts[String(id)];
+    if (rLocal) {
+      const restored: Receipt = {
+        id: rLocal.id,
+        merchant: rLocal.derived?.merchant || rLocal.data?.merchant || 'Receipt',
+        total: rLocal.derived?.total || rLocal.data?.total || 0,
+        purchased_at: rLocal.derived?.date_str || ''
+      };
+      const next = [...itemsRef.current, restored];
+      next.sort((a,b)=>b.id-a.id);
+      setItems(next);
+    }
+    // Reset progress for potential next deletion
+    progressAnim.stopAnimation();
+    progressAnim.setValue(0);
+  };
+
+  const onDelete = (id: number) => {
+    Alert.alert('Delete receipt', `Temporarily delete #${id}? You can undo for ${UNDO_MS/1000}s.`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => scheduleDeletion(id) }
+    ]);
+  };
 
   const onPickAndIngest = async () => {
     try {
@@ -83,13 +158,33 @@ export default function ReceiptsScreen() {
           refreshing={loading}
           onRefresh={load}
           keyExtractor={x => String(x.id)}
-          renderItem={({ item }) => (
-            <TouchableOpacity onPress={() => navigation.navigate('ReceiptDetail', { id: item.id })} style={styles.item}>
-              <Text style={styles.m}>{item.merchant || 'Unknown'}</Text>
-              <Text>{item.total == null ? '' : `$${item.total}`}</Text>
-              <Text>{item.purchased_at || ''}</Text>
-            </TouchableOpacity>
-          )}
+          renderItem={({ item }) => {
+            const Action = () => (
+              <View style={styles.swipeAction}>
+                <Text style={styles.swipeText}>Delete</Text>
+              </View>
+            );
+            return (
+              <Swipeable
+                renderLeftActions={Action}
+                renderRightActions={Action}
+                onSwipeableOpen={() => onDelete(item.id)}
+              >
+                <TouchableOpacity
+                  onPress={() => navigation.navigate('ReceiptDetail', { id: item.id })}
+                  style={styles.item}
+                >
+                  <View style={styles.row}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.m}>{item.merchant || 'Unknown'}</Text>
+                      <Text style={styles.sub}>{item.purchased_at || ''}</Text>
+                    </View>
+                    <Text style={styles.amount}>{item.total == null ? '' : `$${item.total}`}</Text>
+                  </View>
+                </TouchableOpacity>
+              </Swipeable>
+            );
+          }}
         />
       )}
 
@@ -97,6 +192,25 @@ export default function ReceiptsScreen() {
       <Pressable accessibilityRole="button" accessibilityLabel="Pick and ingest receipt" onPress={onPickAndIngest} style={styles.fab}>
         <Ionicons name="add" size={28} color="#fff" />
       </Pressable>
+
+      {/* Undo toast (show most recent pending deletion) */}
+      {pending.length > 0 && (() => {
+        const last = pending.at(-1)!;
+        const remaining = Math.max(0, UNDO_MS - Math.round((progressAnim as any)._value * UNDO_MS));
+        const secondsLeft = Math.ceil(remaining / 1000);
+        const widthInterpolate = progressAnim.interpolate({ inputRange: [0,1], outputRange: ['100%','0%'] });
+        return (
+          <View style={styles.undoBar}>
+            <View style={styles.undoContent}>
+              <Text style={styles.undoText}>Deleted #{last.id} ({last.merchant}) · Undo ({secondsLeft}s)</Text>
+              <Pressable onPress={() => undoDelete(last.id)} style={styles.undoBtn}>
+                <Text style={styles.undoBtnText}>UNDO</Text>
+              </Pressable>
+            </View>
+            <Animated.View style={[styles.progressBar, { width: widthInterpolate }]} />
+          </View>
+        );
+      })()}
     </View>
   );
 }
@@ -104,7 +218,10 @@ export default function ReceiptsScreen() {
 const styles = StyleSheet.create({
   c: { flex: 1, padding: 12 },
   item: { paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#ddd' },
+  row: { flexDirection: 'row', alignItems: 'center' },
   m: { fontWeight: '600' },
+  sub: { color: '#64748b', marginTop: 2 },
+  amount: { fontWeight: '600' },
   fab: {
     position: 'absolute', right: 20, bottom: 24,
     backgroundColor: '#4f46e5', height: 56, width: 56, borderRadius: 28,
@@ -115,4 +232,12 @@ const styles = StyleSheet.create({
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   emptyTitle: { marginTop: 12, fontSize: 18, fontWeight: '700', color: '#334155' },
   emptyText: { marginTop: 6, color: '#64748b' },
+  swipeAction: { backgroundColor: '#ef4444', justifyContent: 'center', alignItems: 'flex-end', paddingHorizontal: 20 },
+  swipeText: { color: '#fff', fontWeight: '700' },
+  undoBar: { position: 'absolute', bottom: 0, left: 0, right: 0, paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#1f2937' },
+  undoContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
+  undoText: { color: '#f1f5f9', flex: 1, marginRight: 12 },
+  undoBtn: { paddingHorizontal: 12, paddingVertical: 6, backgroundColor: '#4f46e5', borderRadius: 4 },
+  undoBtnText: { color: '#fff', fontWeight: '700' },
+  progressBar: { height: 4, backgroundColor: '#4f46e5', borderRadius: 2 },
 });

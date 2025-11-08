@@ -23,6 +23,7 @@ type AppState = {
   // Local receipts cache for offline-first UI
   receipts: Record<string, { id: number; data?: any; derived?: any; updatedAt: string }>;
   setReceiptData: (id: number, data?: any, derived?: any) => Promise<void>;
+  removeReceipt: (id: number) => Promise<void>;
   // Budgets per category (monthly limits)
   budgets: Record<string, number>;
   setBudget: (category: string, amount: number | null) => Promise<void>;
@@ -220,7 +221,23 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
     });
   };
 
-  const value = useMemo<AppState>(() => ({ baseUrl, setBaseUrl, username, setUsername, password, setPassword, deviceId, setDeviceId, pubB64, setPubB64, privB64, setPrivB64, pem, setPem, registered, setRegistered: markRegistered, authHeaders, fetchWithAuth, logout, setOnAuthFailure, save, dekWraps, setReceiptDekWrap, receipts, setReceiptData, budgets, setBudget, accessToken, refreshToken, setTokens }), [baseUrl, username, password, deviceId, pubB64, privB64, pem, registered, authHeaders, fetchWithAuth, logout, setOnAuthFailure, dekWraps, receipts, budgets, accessToken, refreshToken]);
+  const removeReceipt = async (id: number) => {
+    const key = String(id);
+    setReceipts(prev => {
+      const next = { ...prev };
+      delete next[key];
+      AsyncStorage.setItem('receiptsCache', JSON.stringify(next));
+      return next;
+    });
+    setDekWraps(prev => {
+      const next = { ...prev };
+      if (key in next) delete next[key];
+      AsyncStorage.setItem('dekWraps', JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const value = useMemo<AppState>(() => ({ baseUrl, setBaseUrl, username, setUsername, password, setPassword, deviceId, setDeviceId, pubB64, setPubB64, privB64, setPrivB64, pem, setPem, registered, setRegistered: markRegistered, authHeaders, fetchWithAuth, logout, setOnAuthFailure, save, dekWraps, setReceiptDekWrap, receipts, setReceiptData, removeReceipt, budgets, setBudget, accessToken, refreshToken, setTokens }), [baseUrl, username, password, deviceId, pubB64, privB64, pem, registered, authHeaders, fetchWithAuth, logout, setOnAuthFailure, dekWraps, receipts, budgets, accessToken, refreshToken]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Alert, Button } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/AppNavigator';
+import { useNavigation } from '@react-navigation/native';
 import { useAppState } from '../context/AppState';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ReceiptDetail'>;
@@ -13,7 +14,8 @@ function hasData(b: DecryptResponse | null): b is { data: Record<string, unknown
 
 export default function ReceiptDetailScreen({ route }: Readonly<Props>) {
   const { id } = route.params;
-  const { receipts } = useAppState();
+  const { receipts, baseUrl, authHeaders, fetchWithAuth, removeReceipt } = useAppState();
+  const navigation = useNavigation<any>();
   const [body, setBody] = useState<DecryptResponse | null>(null);
 
   useEffect(() => {
@@ -44,6 +46,25 @@ export default function ReceiptDetailScreen({ route }: Readonly<Props>) {
     }
   };
 
+  const onDelete = () => {
+    Alert.alert('Delete receipt', `Delete receipt #${id}?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => { void (async () => {
+        try {
+          const r = await fetchWithAuth(`${baseUrl.replace(/\/$/, '')}/api/v1/receipts/${id}`, { method: 'DELETE', headers: authHeaders });
+          if (r.status === 204 || r.status === 200) {
+            await removeReceipt(id);
+            navigation.goBack();
+          } else {
+            const body = await r.text();
+            Alert.alert('Error', body || 'Failed to delete');
+          }
+        } catch (e: any) {
+          Alert.alert('Error', e?.message || 'Failed to delete');
+        }
+      })(); } }
+    ]);
+  };
   return (
     <ScrollView contentContainerStyle={styles.c}>
       <Text style={styles.t}>Receipt #{id}</Text>
@@ -67,8 +88,7 @@ export default function ReceiptDetailScreen({ route }: Readonly<Props>) {
             </View>
           ) : null}
           <Text style={styles.meta}>Processed: {formatDateTime(processedAt)}</Text>
-          <Text style={styles.jsonLabel}>Raw</Text>
-          <Text selectable style={styles.json}>{JSON.stringify(d, null, 2)}</Text>
+          <View style={styles.deleteBtn}><Button title="Delete" color="#ef4444" onPress={onDelete} /></View>
         </View>
       ) : (
         <Text>No local data for this receipt. Ingest from this device to cache it for offline viewing.</Text>
@@ -90,6 +110,5 @@ const styles = StyleSheet.create({
   itemDesc: { flex: 1, marginRight: 8 },
   itemMeta: { width: 40, textAlign: 'right', color: '#556' },
   itemPrice: { width: 80, textAlign: 'right' },
-  jsonLabel: { marginTop: 10, fontWeight: '600' },
-  json: { fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }) as any },
+  deleteBtn: { marginTop: 12 },
 });
