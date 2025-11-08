@@ -9,6 +9,120 @@ import { Ionicons } from '@expo/vector-icons';
 
 type Receipt = { id: number; merchant?: string; total?: number; purchased_at?: string };
 
+// --------- Helpers & Subcomponents (top-level) ---------
+function relativeDate(dateStr?: string) {
+  if (!dateStr) return '';
+  const dt = new Date(dateStr);
+  if (Number.isNaN(dt.getTime())) return dateStr;
+  const now = Date.now();
+  const diffMs = now - dt.getTime();
+  const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
+  if (diffDays === 0) {
+    const diffHours = Math.floor(diffMs / (60 * 60 * 1000));
+    if (diffHours === 0) {
+      const diffMin = Math.max(0, Math.floor(diffMs / (60 * 1000)));
+      return diffMin <= 1 ? 'just now' : `${diffMin}m ago`;
+    }
+    return `${diffHours}h ago`;
+  }
+  if (diffDays < 7) return `${diffDays}d ago`;
+  const weeks = Math.floor(diffDays / 7);
+  if (weeks < 5) return `${weeks}w ago`;
+  const months = Math.floor(diffDays / 30);
+  if (months < 12) return `${months}mo ago`;
+  const years = Math.floor(diffDays / 365);
+  return `${years}y ago`;
+}
+
+function formatAbsolute(dateStr?: string) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  try {
+    return new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: '2-digit' }).format(d);
+  } catch {
+    return d.toDateString();
+  }
+}
+
+function hashColor(input: string) {
+  let hash = 0;
+  for (const ch of input) {
+    const cp = ch.codePointAt(0) ?? 0;
+    hash = (hash * 31 + cp) >>> 0;
+  }
+  const r = (hash & 0xff0000) >> 16;
+  const g = (hash & 0x00ff00) >> 8;
+  const b = (hash & 0x0000ff);
+  const lr = Math.floor((r + 255) / 2);
+  const lg = Math.floor((g + 255) / 2);
+  const lb = Math.floor((b + 255) / 2);
+  return `rgb(${lr}, ${lg}, ${lb})`;
+}
+
+function amountColor(total: number | undefined) {
+  if (total == null) return '#334155';
+  if (total < 25) return '#059669';
+  if (total < 100) return '#f59e0b';
+  return '#dc2626';
+}
+
+const SwipeAction = () => (
+  <View style={styles.swipeAction}>
+    <Pressable style={styles.swipeBtn}> 
+      <Text style={styles.swipeText}>Delete</Text>
+    </Pressable>
+  </View>
+);
+
+function SkeletonCard({ shimmerBg }: Readonly<{ shimmerBg: any }>) {
+  return (
+    <Animated.View style={[styles.itemCard, { backgroundColor: shimmerBg }]}> 
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <View style={[styles.avatar, { backgroundColor: '#cbd5e1' }]} />
+        <View style={{ flex: 1, marginLeft: 12 }}>
+          <View style={styles.skelLine} />
+          <View style={[styles.skelLine, { width: '40%', marginTop: 6 }]} />
+        </View>
+        <View style={[styles.skelLine, { width: 48 }]} />
+      </View>
+    </Animated.View>
+  );
+}
+
+function ReceiptItem({ item, merchant, dateDisplay, onPress, onToggleDate }: Readonly<{ item: Receipt; merchant: string; dateDisplay: string; onPress: () => void; onToggleDate: () => void }>) {
+  const avatarBg = hashColor(merchant);
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const onPressIn = () => Animated.spring(scaleAnim, { toValue: 0.97, useNativeDriver: true }).start();
+  const onPressOut = () => Animated.spring(scaleAnim, { toValue: 1, friction: 5, useNativeDriver: true }).start();
+  return (
+    <TouchableOpacity
+      activeOpacity={0.85}
+      onPress={onPress}
+      onPressIn={onPressIn}
+      onPressOut={onPressOut}
+      style={styles.touchWrap}
+    >
+      <Animated.View style={[styles.itemCard, { transform: [{ scale: scaleAnim }] }]}> 
+        <View style={styles.row}>
+          <View style={styles.avatarWrap}>
+            <View style={[styles.avatar, { backgroundColor: avatarBg }]}>
+              <Text style={styles.avatarText}>{merchant.charAt(0).toUpperCase()}</Text>
+            </View>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.m}>{merchant}</Text>
+            <Pressable onPress={onToggleDate}>
+              <Text style={styles.sub}>{dateDisplay}</Text>
+            </Pressable>
+          </View>
+          <Text style={[styles.amount, { color: amountColor(item.total) }]}>{item.total == null ? '' : `$${item.total}`}</Text>
+        </View>
+      </Animated.View>
+    </TouchableOpacity>
+  );
+}
+
 export default function ReceiptsScreen() {
   const navigation = useNavigation<any>();
   const { baseUrl, authHeaders, deviceId, pem, privB64, setReceiptDekWrap, receipts, setReceiptData, fetchWithAuth, removeReceipt } = useAppState();
@@ -144,49 +258,86 @@ export default function ReceiptsScreen() {
 
   const isEmpty = !loading && items.length === 0;
 
+  // Track which receipts show absolute date instead of relative
+  const [absoluteDateIds, setAbsoluteDateIds] = useState<Set<number>>(new Set());
+  const toggleDateMode = (id: number) => {
+    setAbsoluteDateIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  // Skeleton shimmer animation when loading & no items yet
+  const shimmerAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (loading && items.length === 0) {
+      shimmerAnim.setValue(0);
+      Animated.loop(
+        Animated.timing(shimmerAnim, { toValue: 1, duration: 1200, easing: Easing.linear, useNativeDriver: false })
+      ).start();
+    } else {
+      shimmerAnim.stopAnimation();
+    }
+  }, [loading, items.length, shimmerAnim]);
+
+  const shimmerBg = shimmerAnim.interpolate({ inputRange: [0, 0.5, 1], outputRange: ['#e2e8f0', '#f8fafc', '#e2e8f0'] });
+
+  let content: React.ReactNode;
+  if (loading && items.length === 0) {
+    content = (
+      <FlatList
+        data={Array.from({ length: 6 }).map((_, i) => i)}
+        keyExtractor={(x) => `${x}`}
+        contentContainerStyle={styles.listContent}
+        renderItem={() => <SkeletonCard shimmerBg={shimmerBg} />}
+      />
+    );
+  } else if (isEmpty) {
+    content = (
+      <View style={styles.empty}>
+        <Ionicons name="document-text-outline" size={72} color="#94a3b8" />
+        <Text style={styles.emptyTitle}>No receipts yet</Text>
+        <Text style={styles.emptyText}>Tap the + button to ingest your first receipt.</Text>
+      </View>
+    );
+  } else {
+    content = (
+      <FlatList
+        data={items}
+        refreshing={loading}
+        onRefresh={load}
+        keyExtractor={x => String(x.id)}
+        contentContainerStyle={styles.listContent}
+        renderItem={({ item }) => {
+          const showAbs = absoluteDateIds.has(item.id);
+          const dateDisplay = showAbs ? formatAbsolute(item.purchased_at) : relativeDate(item.purchased_at);
+          const merchant = item.merchant || 'Unknown';
+          return (
+            <Swipeable
+              renderLeftActions={SwipeAction}
+              renderRightActions={SwipeAction}
+              overshootLeft={false}
+              overshootRight={false}
+              onSwipeableOpen={() => onDelete(item.id)}
+            >
+              <ReceiptItem
+                item={item}
+                merchant={merchant}
+                dateDisplay={dateDisplay}
+                onPress={() => navigation.navigate('ReceiptDetail', { id: item.id })}
+                onToggleDate={() => toggleDateMode(item.id)}
+              />
+            </Swipeable>
+          );
+        }}
+      />
+    );
+  }
+
   return (
     <View style={styles.c}>
-      {isEmpty ? (
-        <View style={styles.empty}>
-          <Ionicons name="document-text-outline" size={72} color="#94a3b8" />
-          <Text style={styles.emptyTitle}>No receipts yet</Text>
-          <Text style={styles.emptyText}>Tap the + button to ingest your first receipt.</Text>
-        </View>
-      ) : (
-        <FlatList
-          data={items}
-          refreshing={loading}
-          onRefresh={load}
-          keyExtractor={x => String(x.id)}
-          renderItem={({ item }) => {
-            const Action = () => (
-              <View style={styles.swipeAction}>
-                <Text style={styles.swipeText}>Delete</Text>
-              </View>
-            );
-            return (
-              <Swipeable
-                renderLeftActions={Action}
-                renderRightActions={Action}
-                onSwipeableOpen={() => onDelete(item.id)}
-              >
-                <TouchableOpacity
-                  onPress={() => navigation.navigate('ReceiptDetail', { id: item.id })}
-                  style={styles.item}
-                >
-                  <View style={styles.row}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.m}>{item.merchant || 'Unknown'}</Text>
-                      <Text style={styles.sub}>{item.purchased_at || ''}</Text>
-                    </View>
-                    <Text style={styles.amount}>{item.total == null ? '' : `$${item.total}`}</Text>
-                  </View>
-                </TouchableOpacity>
-              </Swipeable>
-            );
-          }}
-        />
-      )}
+      {content}
 
       {/* Floating Action Button */}
       <Pressable accessibilityRole="button" accessibilityLabel="Pick and ingest receipt" onPress={onPickAndIngest} style={styles.fab}>
@@ -216,12 +367,19 @@ export default function ReceiptsScreen() {
 }
 
 const styles = StyleSheet.create({
-  c: { flex: 1, padding: 12 },
-  item: { paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#ddd' },
+  c: { flex: 1, backgroundColor: '#f1f5f9' },
+  listContent: { padding: 12, paddingBottom: 120 },
+  touchWrap: { borderRadius: 14 },
+  itemCard: { padding: 12, borderRadius: 14, backgroundColor: '#fff', marginBottom: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: '#e2e8f0',
+    shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
   row: { flexDirection: 'row', alignItems: 'center' },
   m: { fontWeight: '600' },
   sub: { color: '#64748b', marginTop: 2 },
   amount: { fontWeight: '600' },
+  avatarWrap: { marginRight: 12 },
+  avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { color: '#0f172a', fontWeight: '700', fontSize: 16 },
+  skelLine: { height: 12, backgroundColor: '#cbd5e1', borderRadius: 6, width: '60%' },
   fab: {
     position: 'absolute', right: 20, bottom: 24,
     backgroundColor: '#4f46e5', height: 56, width: 56, borderRadius: 28,
@@ -232,7 +390,9 @@ const styles = StyleSheet.create({
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   emptyTitle: { marginTop: 12, fontSize: 18, fontWeight: '700', color: '#334155' },
   emptyText: { marginTop: 6, color: '#64748b' },
-  swipeAction: { backgroundColor: '#ef4444', justifyContent: 'center', alignItems: 'flex-end', paddingHorizontal: 20 },
+  swipeAction: { flex: 1, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'flex-end', marginVertical: 6 },
+  swipeBtn: { backgroundColor: '#ef4444', height: '88%', aspectRatio: 1, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginRight: 8,
+    shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
   swipeText: { color: '#fff', fontWeight: '700' },
   undoBar: { position: 'absolute', bottom: 0, left: 0, right: 0, paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#1f2937' },
   undoContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
