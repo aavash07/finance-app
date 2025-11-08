@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, Modal, SafeAreaView, Alert, Share } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, Modal, SafeAreaView, Alert, Share, TouchableWithoutFeedback } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { useAppState } from '../context/AppState';
@@ -380,7 +380,10 @@ const styles = StyleSheet.create({
   collapseHeader: { paddingVertical: 6, marginBottom: 6 },
   collapseText: { color: '#334', fontWeight: '600' },
   alertText: { color: '#b91c1c' },
-  modalContainer: { flex: 1, backgroundColor: '#fff' },
+  // Centered modal styles (75% height)
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
+  modalSheet: { backgroundColor: '#fff', maxHeight: '75%', width: '92%', borderRadius: 16, overflow: 'hidden',
+    shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 8 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#e5e7eb' },
   modalTitle: { fontSize: 18, fontWeight: '700' },
   modalClose: { color: '#4f46e5', fontWeight: '600' },
@@ -418,9 +421,12 @@ function BudgetsEditorModal({ visible, onClose, categoriesAll, budgets, setBudge
     );
   };
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalContainer}>
-        <View style={styles.modalHeader}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <TouchableWithoutFeedback onPress={onClose}>
+        <View style={styles.modalBackdrop}>
+          <TouchableWithoutFeedback>
+            <SafeAreaView style={styles.modalSheet}>
+              <View style={styles.modalHeader}>
           <Text style={styles.modalTitle}>Budgets (Monthly)</Text>
           <View style={{ flexDirection: 'row', gap: 16 }}>
             <Pressable onPress={onClearAll} disabled={count === 0}>
@@ -430,8 +436,8 @@ function BudgetsEditorModal({ visible, onClose, categoriesAll, budgets, setBudge
               <Text style={styles.modalClose}>Close</Text>
             </Pressable>
           </View>
-        </View>
-        <ScrollView contentContainerStyle={styles.modalBody}>
+              </View>
+              <ScrollView contentContainerStyle={styles.modalBody}>
           <Text style={styles.smallNote}>Set a monthly limit per category. Leave blank or 0 to remove.</Text>
           {categoriesAll.map(cat => (
             <View key={cat} style={styles.rowBare}>
@@ -451,8 +457,11 @@ function BudgetsEditorModal({ visible, onClose, categoriesAll, budgets, setBudge
               />
             </View>
           ))}
-        </ScrollView>
-      </SafeAreaView>
+              </ScrollView>
+            </SafeAreaView>
+          </TouchableWithoutFeedback>
+        </View>
+      </TouchableWithoutFeedback>
     </Modal>
   );
 }
@@ -467,29 +476,47 @@ type InsightsModalProps = {
 };
 
 function InsightsModal({ visible, onClose, largestReceipt30d, topCatThisMonth, latestMoM, fmtAmount }: Readonly<InsightsModalProps>) {
+  const formatDate = (s: string) => {
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) return s;
+    try {
+      return new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: '2-digit' }).format(d);
+    } catch {
+      return d.toDateString();
+    }
+  };
+  const now = new Date();
+  const monthName = now.toLocaleString(undefined, { month: 'long' });
+  const monthLabel = `${monthName} ${now.getFullYear()}`;
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalContainer}>
-        <View style={styles.modalHeader}>
-          <Text style={styles.modalTitle}>Insights</Text>
-          <Pressable onPress={onClose}><Text style={styles.modalClose}>Close</Text></Pressable>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <TouchableWithoutFeedback onPress={onClose}>
+        <View style={styles.modalBackdrop}>
+          <TouchableWithoutFeedback>
+            <SafeAreaView style={styles.modalSheet}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Insights</Text>
+                <Pressable onPress={onClose}><Text style={styles.modalClose}>Close</Text></Pressable>
+              </View>
+              <ScrollView contentContainerStyle={styles.modalBody}>
+                {largestReceipt30d ? (
+                  <Text>
+                    Largest (last 30 days): {largestReceipt30d.merchant || 'Unknown'} — {fmtAmount(largestReceipt30d.total)} — {formatDate(largestReceipt30d.date)}
+                  </Text>
+                ) : (
+                  <Text>No purchases in the last 30 days</Text>
+                )}
+                <Text>
+                  Top category ({monthLabel}): {topCatThisMonth ? topCatThisMonth[0] : 'n/a'} {topCatThisMonth ? `— ${fmtAmount(topCatThisMonth[1])}` : ''}
+                </Text>
+                <Text>
+                  Latest MoM change: {latestMoM >= 0 ? '+' : ''}{latestMoM.toFixed(1)}%
+                </Text>
+              </ScrollView>
+            </SafeAreaView>
+          </TouchableWithoutFeedback>
         </View>
-        <ScrollView contentContainerStyle={styles.modalBody}>
-          {largestReceipt30d ? (
-            <Text>
-              Largest (30d): {largestReceipt30d.merchant || 'Unknown'} — {fmtAmount(largestReceipt30d.total)} — {largestReceipt30d.date}
-            </Text>
-          ) : (
-            <Text>No purchases in last 30 days</Text>
-          )}
-          <Text>
-            Top category (this month): {topCatThisMonth ? topCatThisMonth[0] : 'n/a'} {topCatThisMonth ? `— ${fmtAmount(topCatThisMonth[1])}` : ''}
-          </Text>
-          <Text>
-            Latest MoM change: {latestMoM >= 0 ? '+' : ''}{latestMoM.toFixed(1)}%
-          </Text>
-        </ScrollView>
-      </SafeAreaView>
+      </TouchableWithoutFeedback>
     </Modal>
   );
 }
