@@ -1,5 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useLayoutEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, Modal, SafeAreaView, Alert, Share, TouchableWithoutFeedback } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { useAppState } from '../context/AppState';
@@ -43,7 +44,7 @@ function Section({ title, children }: Readonly<React.PropsWithChildren<{ title: 
   );
 }
 
-export default function AnalyticsScreen() {
+export default function AnalyticsScreen({ navigation }: any) {
   const { receipts, budgets, setBudget } = useAppState();
   const baseList = useMemo(() => Object.values(receipts || {}), [receipts]);
 
@@ -64,6 +65,8 @@ export default function AnalyticsScreen() {
   const [minAmt, setMinAmt] = useState('');
   const [maxAmt, setMaxAmt] = useState('');
   const [onlyWithItems, setOnlyWithItems] = useState(false);
+  // Removed collapsible inline filters; using FAB + modal instead
+  const [filtersModalOpen, setFiltersModalOpen] = useState(false);
 
   const filtered = useMemo(() => {
     // Date filtering
@@ -251,27 +254,31 @@ export default function AnalyticsScreen() {
     }
   };
 
-  return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.c}>
-      <Text style={styles.t}>Analytics</Text>
+  // Navigation header chip
+  const HeaderRight = useCallback(() => (
+    <ActiveFiltersSummary
+      dateFilter={dateFilter}
+      currencyFilter={currencyFilter}
+      q={q}
+      minAmt={minAmt}
+      maxAmt={maxAmt}
+      onlyWithItems={onlyWithItems}
+      total={baseList.length}
+      filtered={filtered.length}
+      onOpen={() => setFiltersModalOpen(true)}
+    />
+  ), [dateFilter, currencyFilter, q, minAmt, maxAmt, onlyWithItems, baseList.length, filtered.length]);
 
-      <Section title="Filters">
-        <FiltersPanel
-        currencies={currencies}
-        dateFilter={dateFilter}
-        setDateFilter={setDateFilter}
-        currencyFilter={currencyFilter}
-        setCurrencyFilter={setCurrencyFilter}
-        q={q}
-        setQ={setQ}
-        minAmt={minAmt}
-        setMinAmt={setMinAmt}
-        maxAmt={maxAmt}
-        setMaxAmt={setMaxAmt}
-        onlyWithItems={onlyWithItems}
-        setOnlyWithItems={(v: boolean) => setOnlyWithItems(v)}
-        />
-      </Section>
+  useLayoutEffect(() => {
+    navigation?.setOptions?.({ headerTitle: 'Analytics', headerRight: HeaderRight });
+  }, [navigation, HeaderRight]);
+
+  return (
+    <View style={styles.container}>
+      <ScrollView style={styles.screen} contentContainerStyle={styles.c}>
+        <Text style={styles.t}>Analytics</Text>
+
+      {/* Inline filters section removed (superseded by FAB + modal) */}
 
       <OverviewSection kpis={kpis} fmtAmount={fmtAmount} />
 
@@ -331,14 +338,41 @@ export default function AnalyticsScreen() {
             latestMoM={latestMoM}
             fmtAmount={fmtAmount}
           />
-    </ScrollView>
+      </ScrollView>
+      {/* Floating Filters Action Button */}
+      <Pressable accessibilityRole="button" accessibilityLabel="Open filters" onPress={() => setFiltersModalOpen(true)} style={styles.filtersFab}>
+        <Ionicons name="funnel" size={22} color="#fff" />
+      </Pressable>
+      <FiltersModal
+        visible={filtersModalOpen}
+        onClose={() => setFiltersModalOpen(false)}
+        currencies={currencies}
+        dateFilter={dateFilter}
+        setDateFilter={setDateFilter}
+        currencyFilter={currencyFilter}
+        setCurrencyFilter={setCurrencyFilter}
+        q={q}
+        setQ={setQ}
+        minAmt={minAmt}
+        setMinAmt={setMinAmt}
+        maxAmt={maxAmt}
+        setMaxAmt={setMaxAmt}
+        onlyWithItems={onlyWithItems}
+        setOnlyWithItems={setOnlyWithItems}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { backgroundColor: '#f8fafc' },
+  container: { flex: 1, backgroundColor: '#f8fafc', position: 'relative' },
+  screen: { backgroundColor: 'transparent' },
   c: { padding: 16 },
   t: { fontSize: 20, fontWeight: '600', marginBottom: 8 },
+  activeFiltersWrap: { marginBottom: 12 },
+  activeFiltersChip: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', backgroundColor: '#eef1f5', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20 },
+  activeFiltersText: { color: '#334', fontSize: 12, fontWeight: '500' },
+  activeFiltersIcon: { marginRight: 6 },
   filters: { marginBottom: 10 },
   pillsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
   pill: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, backgroundColor: '#eef1f5' },
@@ -383,6 +417,8 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 18, fontWeight: '700' },
   modalClose: { color: '#4f46e5', fontWeight: '600' },
   modalBody: { padding: 16 },
+  filtersFab: { position: 'absolute', bottom: 28, right: 20, backgroundColor: '#4f46e5', height: 56, width: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center',
+    shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 6, shadowOffset: { width: 0, height: 3 }, elevation: 6 },
 });
 
 type SetBudgetFn = (category: string, amount: number | null) => Promise<void> | void;
@@ -601,6 +637,61 @@ function FiltersPanel({ currencies, dateFilter, setDateFilter, currencyFilter, s
         </Pressable>
       </View>
     </View>
+  );
+}
+
+// Summary chip showing currently active filters; press opens modal
+function ActiveFiltersSummary({ dateFilter, currencyFilter, q, minAmt, maxAmt, onlyWithItems, total, filtered, onOpen }: Readonly<{ dateFilter: DateFilter; currencyFilter: string; q: string; minAmt: string; maxAmt: string; onlyWithItems: boolean; total: number; filtered: number; onOpen: () => void }>) {
+  const parts: string[] = [];
+  if (dateFilter !== 'ALL') parts.push(dateFilter);
+  if (currencyFilter !== 'ALL') parts.push(currencyFilter);
+  if (q.trim()) parts.push(`q:${q.trim()}`);
+  if (minAmt.trim()) parts.push(`min:${minAmt.trim()}`);
+  if (maxAmt.trim()) parts.push(`max:${maxAmt.trim()}`);
+  if (onlyWithItems) parts.push('has-items');
+  const countPart = `${filtered}/${total}`;
+  const label = parts.length ? parts.join(' · ') : 'none';
+  return (
+    <Pressable onPress={onOpen} style={styles.activeFiltersChip} accessibilityRole="button" accessibilityLabel="Open filters">
+      <Ionicons name="funnel" size={14} color="#4f46e5" style={styles.activeFiltersIcon} />
+      <Text style={styles.activeFiltersText} numberOfLines={1}>Filters: {label}  •  {countPart}</Text>
+    </Pressable>
+  );
+}
+
+// Modal wrapper reusing FiltersPanel for FAB-triggered flow
+type FiltersModalProps = FiltersPanelProps & { visible: boolean; onClose: () => void };
+function FiltersModal({ visible, onClose, ...panelProps }: Readonly<FiltersModalProps>) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <TouchableWithoutFeedback onPress={onClose}>
+        <View style={styles.modalBackdrop}>
+          <TouchableWithoutFeedback>
+            <SafeAreaView style={[styles.modalSheet, { maxHeight: '80%' }]}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Filters</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+                  <Pressable disabled={!(panelProps.dateFilter !== 'ALL' || panelProps.currencyFilter !== 'ALL' || panelProps.q.trim() || panelProps.minAmt.trim() || panelProps.maxAmt.trim() || panelProps.onlyWithItems)} onPress={() => {
+                    panelProps.setDateFilter('ALL');
+                    panelProps.setCurrencyFilter('ALL');
+                    panelProps.setQ('');
+                    panelProps.setMinAmt('');
+                    panelProps.setMaxAmt('');
+                    panelProps.setOnlyWithItems(false);
+                  }}>
+                    <Text style={[styles.modalClose, { color: (panelProps.dateFilter !== 'ALL' || panelProps.currencyFilter !== 'ALL' || panelProps.q.trim() || panelProps.minAmt.trim() || panelProps.maxAmt.trim() || panelProps.onlyWithItems) ? '#ef4444' : '#94a3b8' }]}>Clear All</Text>
+                  </Pressable>
+                  <Pressable onPress={onClose}><Text style={styles.modalClose}>Close</Text></Pressable>
+                </View>
+              </View>
+              <ScrollView contentContainerStyle={styles.modalBody}>
+                <FiltersPanel {...panelProps} />
+              </ScrollView>
+            </SafeAreaView>
+          </TouchableWithoutFeedback>
+        </View>
+      </TouchableWithoutFeedback>
+    </Modal>
   );
 }
 
