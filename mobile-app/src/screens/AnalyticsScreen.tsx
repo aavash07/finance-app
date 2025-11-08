@@ -35,8 +35,10 @@ function Bar({ pct, color }: Readonly<{ pct: number; color?: string }>) {
 function Section({ title, children }: Readonly<React.PropsWithChildren<{ title: string }>>) {
   return (
     <View style={styles.section}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      {children}
+      <View style={styles.sectionBox}>
+        <Text style={styles.sectionTitle}>{title}</Text>
+        <View style={styles.sectionContent}>{children}</View>
+      </View>
     </View>
   );
 }
@@ -250,10 +252,11 @@ export default function AnalyticsScreen() {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.c}>
+    <ScrollView style={styles.screen} contentContainerStyle={styles.c}>
       <Text style={styles.t}>Analytics</Text>
 
-      <FiltersPanel
+      <Section title="Filters">
+        <FiltersPanel
         currencies={currencies}
         dateFilter={dateFilter}
         setDateFilter={setDateFilter}
@@ -267,16 +270,10 @@ export default function AnalyticsScreen() {
         setMaxAmt={setMaxAmt}
         onlyWithItems={onlyWithItems}
         setOnlyWithItems={(v: boolean) => setOnlyWithItems(v)}
-      />
+        />
+      </Section>
 
-      <View style={styles.kpiRow}>
-        {kpis.map(k => (
-          <View key={k.label} style={styles.kpiCard}>
-            <Text style={styles.kpiLabel}>{k.label}</Text>
-            <Text style={styles.kpiValue}>{k.label === 'Receipts' ? k.value : fmtAmount(Number(k.value))}</Text>
-          </View>
-        ))}
-      </View>
+      <OverviewSection kpis={kpis} fmtAmount={fmtAmount} />
 
       <MonthlySpendSection byMonth={byMonth} maxMonth={maxMonth} fmtAmount={fmtAmount} />
 
@@ -286,22 +283,13 @@ export default function AnalyticsScreen() {
 
       <ByCategorySection byCategory={byCategory} maxCategory={maxCategory} budgets={budgets} fmtAmount={fmtAmount} />
 
-      <Section title="Budget Alerts">
-        <Pressable onPress={() => setAlertsOpen(v => !v)} style={styles.collapseHeader}>
-          <Text style={styles.collapseText}>{alertsOpen ? 'Hide' : 'Show'} alerts ({overAlerts.length})</Text>
-        </Pressable>
-        {alertsOpen ? (
-          <View>
-            {overAlerts.length === 0 ? (
-              <Text style={styles.empty}>No categories over budget</Text>
-            ) : (
-              overAlerts.map(c => (
-                <Text key={c.key} style={styles.alertText}>Over budget: {c.key} — {fmtAmount(c.value)} / {fmtAmount(budgets[c.key])}</Text>
-              ))
-            )}
-          </View>
-        ) : null}
-      </Section>
+      <BudgetAlertsSection
+        overAlerts={overAlerts}
+        alertsOpen={alertsOpen}
+        setAlertsOpen={setAlertsOpen}
+        budgets={budgets}
+        fmtAmount={fmtAmount}
+      />
 
       <Section title="Budgets (Monthly)">
         <Pressable onPress={() => setBudgetModalOpen(true)} style={styles.collapseHeader}>
@@ -348,6 +336,7 @@ export default function AnalyticsScreen() {
 }
 
 const styles = StyleSheet.create({
+  screen: { backgroundColor: '#f8fafc' },
   c: { padding: 16 },
   t: { fontSize: 20, fontWeight: '600', marginBottom: 8 },
   filters: { marginBottom: 10 },
@@ -362,7 +351,10 @@ const styles = StyleSheet.create({
   kpiLabel: { color: '#556' },
   kpiValue: { fontSize: 18, fontWeight: '700' },
   section: { marginBottom: 16 },
-  sectionTitle: { fontSize: 16, fontWeight: '600', marginBottom: 8 },
+  sectionBox: { backgroundColor: '#fff', borderRadius: 12, padding: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: '#e5e7eb',
+    shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
+  sectionTitle: { fontSize: 16, fontWeight: '700', marginBottom: 8, color: '#111827' },
+  sectionContent: {},
   row: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
   rowBare: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
   rowLabel: { width: 90, color: '#334' },
@@ -380,6 +372,9 @@ const styles = StyleSheet.create({
   collapseHeader: { paddingVertical: 6, marginBottom: 6 },
   collapseText: { color: '#334', fontWeight: '600' },
   alertText: { color: '#b91c1c' },
+  alertsList: { marginTop: 4 },
+  alertRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 },
+  alertAmt: { fontSize: 12, color: '#374151' },
   // Centered modal styles (75% height)
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
   modalSheet: { backgroundColor: '#fff', maxHeight: '75%', width: '92%', borderRadius: 16, overflow: 'hidden',
@@ -684,6 +679,53 @@ function ByCategorySection({ byCategory, maxCategory, budgets, fmtAmount }: Read
           <Text style={styles.rowVal}>{fmtAmount(c.value)}</Text>
         </View>
       ))}
+    </Section>
+  );
+}
+
+// Extracted overview section component
+function OverviewSection({ kpis, fmtAmount }: Readonly<{ kpis: Metric[]; fmtAmount: (n:number)=>string }>) {
+  return (
+    <Section title="Overview">
+      <View style={styles.kpiRow}>
+        {kpis.map(k => (
+          <View key={k.label} style={styles.kpiCard}>
+            <Text style={styles.kpiLabel}>{k.label}</Text>
+            <Text style={styles.kpiValue}>{k.label === 'Receipts' ? k.value : fmtAmount(Number(k.value))}</Text>
+          </View>
+        ))}
+      </View>
+    </Section>
+  );
+}
+
+type BudgetAlertsSectionProps = {
+  overAlerts: { key: string; value: number }[];
+  alertsOpen: boolean;
+  setAlertsOpen: (v: boolean | ((prev: boolean) => boolean)) => void;
+  budgets: Record<string, number>;
+  fmtAmount: (n:number)=>string;
+};
+function BudgetAlertsSection({ overAlerts, alertsOpen, setAlertsOpen, budgets, fmtAmount }: Readonly<BudgetAlertsSectionProps>) {
+  return (
+    <Section title="Budget Alerts">
+      <Pressable onPress={() => setAlertsOpen(v => !v)} style={styles.collapseHeader}>
+        <Text style={styles.collapseText}>{alertsOpen ? 'Hide' : 'Show'} alerts ({overAlerts.length})</Text>
+      </Pressable>
+      {alertsOpen ? (
+        <View style={styles.alertsList}>
+          {overAlerts.length === 0 ? (
+            <Text style={styles.empty}>No categories over budget</Text>
+          ) : (
+            overAlerts.map(c => (
+              <View key={c.key} style={styles.alertRow}>
+                <Text style={styles.alertText}>Over: {c.key}</Text>
+                <Text style={styles.alertAmt}>{fmtAmount(c.value)} / {fmtAmount(budgets[c.key])}</Text>
+              </View>
+            ))
+          )}
+        </View>
+      ) : null}
     </Section>
   );
 }
