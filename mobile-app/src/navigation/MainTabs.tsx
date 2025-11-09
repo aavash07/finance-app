@@ -36,7 +36,7 @@ export default function MainTabs() {
         tabBarIcon: ({ color, size, focused }) => renderIcon(route.name, color, size, focused),
       })}
     >
-      <Tab.Screen name="ReceiptsTab" component={ReceiptsScreen} options={{ title: 'Receipts' }} />
+  <Tab.Screen name="ReceiptsTab" component={ReceiptsScreen} options={{ title: 'Receipts', headerShown: true }} />
       <Tab.Screen name="AnalyticsTab" component={AnalyticsScreen} options={{ title: 'Analytics', headerShown: true }} />
       <Tab.Screen name="AccountTab" component={AccountStack} options={{ title: 'Account' }} />
     </Tab.Navigator>

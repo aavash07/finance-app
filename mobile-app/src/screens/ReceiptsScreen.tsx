@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useLayoutEffect } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, Pressable, Animated, Easing, LayoutAnimation, Platform, UIManager, Modal, TouchableWithoutFeedback, SafeAreaView } from 'react-native';
 import { GestureHandlerRootView, Swipeable } from 'react-native-gesture-handler';
 import * as ImagePicker from 'expo-image-picker';
@@ -144,6 +144,26 @@ export default function ReceiptsScreen() {
   // Archived receipts (local UI state)
   const [archivedIds, setArchivedIds] = useState<Set<number>>(new Set());
   const [archivedOpen, setArchivedOpen] = useState(false);
+
+  // Header chip similar to Analytics headerRight
+  const HeaderRight = React.useCallback(() => {
+    if (archivedIds.size === 0) return null;
+    return (
+      <Pressable
+        onPress={() => setArchivedOpen(true)}
+        style={[styles.archivedChip, { marginBottom: 0 }]}
+        accessibilityRole="button"
+        accessibilityLabel={`Open archived receipts (${archivedIds.size})`}
+      >
+        <Ionicons name="archive" size={16} color="#fff" />
+        <Text style={styles.archivedChipText}>Archived ({archivedIds.size})</Text>
+      </Pressable>
+    );
+  }, [archivedIds.size]);
+
+  useLayoutEffect(() => {
+    navigation?.setOptions?.({ headerTitle: 'Receipts', headerRight: HeaderRight });
+  }, [navigation, HeaderRight]);
 
   const load = async () => {
     setLoading(true);
@@ -373,12 +393,6 @@ export default function ReceiptsScreen() {
         onRefresh={load}
         keyExtractor={(x) => String(x.id)}
         contentContainerStyle={styles.listContent}
-        ListHeaderComponent={archivedIds.size > 0 ? (
-          <Pressable onPress={() => setArchivedOpen(true)} style={styles.archivedChip} accessibilityRole="button" accessibilityLabel="Open archived receipts">
-            <Ionicons name="archive" size={16} color="#fff" />
-            <Text style={styles.archivedChipText}>Archived ({archivedIds.size})</Text>
-          </Pressable>
-        ) : null}
         renderItem={({ item }) => {
           const showAbs = absoluteDateIds.has(item.id);
           const dateDisplay = showAbs ? formatAbsolute(item.purchased_at) : relativeDate(item.purchased_at);
