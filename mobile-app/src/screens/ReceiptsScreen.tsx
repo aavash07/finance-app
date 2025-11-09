@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, Pressable, Animated, Easing, Share, LayoutAnimation, Platform, UIManager } from 'react-native';
-import { Swipeable } from 'react-native-gesture-handler';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, Pressable, Animated, Easing, LayoutAnimation, Platform, UIManager, Modal, TouchableWithoutFeedback, SafeAreaView } from 'react-native';
+import { GestureHandlerRootView, Swipeable } from 'react-native-gesture-handler';
 import * as ImagePicker from 'expo-image-picker';
 import { FinanceKitClient, generateDEK, mintGrantJWT, rsaOaepWrapDek } from '@financekit/rn-sdk';
 import { useAppState } from '../context/AppState';
@@ -70,17 +70,17 @@ function amountColor(total: number | undefined) {
 }
 
 const SwipeActionRight = () => (
-  <View style={styles.swipeAction}>
-    <View style={styles.swipeBtn}> 
-      <Text style={styles.swipeText}>Delete</Text>
+  <View style={styles.swipeActionRightWrap}>
+    <View style={styles.swipePillDanger}>
+      <Ionicons name="trash" size={22} color="#fff" />
     </View>
   </View>
 );
 
-const SwipeActionLeft = () => (
-  <View style={styles.swipeActionLeft}>
-    <View style={styles.swipeLeftBtn}>
-      <Text style={styles.swipeText}>Share</Text>
+const SwipeActionLeft = ({ archived }: Readonly<{ archived?: boolean }>) => (
+  <View style={styles.swipeActionLeftWrap}>
+    <View style={archived ? styles.swipePillNeutral : styles.swipePillPrimary}>
+      <Ionicons name={archived ? 'arrow-undo' : 'archive'} size={22} color="#fff" />
     </View>
   </View>
 );
@@ -141,6 +141,9 @@ export default function ReceiptsScreen() {
   const [items, setItems] = useState<Receipt[]>([]);
   const itemsRef = useRef(items);
   const [loading, setLoading] = useState(false);
+  // Archived receipts (local UI state)
+  const [archivedIds, setArchivedIds] = useState<Set<number>>(new Set());
+  const [archivedOpen, setArchivedOpen] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -230,11 +233,31 @@ export default function ReceiptsScreen() {
       }
       setPending(pendingRef.current.filter(x => x.id !== id));
     }, UNDO_MS);
-    setPending([...pendingRef.current.filter(p => p.id !== id), { id, merchant: target.merchant || 'Receipt', timer, item: target }]);
+  setPending([...pendingRef.current.filter(p => p.id !== id), { id, merchant: target.merchant || 'Receipt', timer, item: target }]);
+  // If this was archived, drop it from archived set so state stays consistent
+    setArchivedIds(prev => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
     // Haptic feedback (non-blocking)
     // Fire-and-forget haptic feedback (Promise handled explicitly to satisfy lint)
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
       .catch(e => console.warn('Haptics notification failed:', (e as Error).message));
+  };
+
+  const onArchive = (id: number) => {
+    try { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); } catch (e) { console.warn('LayoutAnimation unavailable:', (e as Error).message); }
+    setArchivedIds(prev => new Set(prev).add(id));
+    // Light haptic
+    Haptics.selectionAsync().catch(() => {});
+  };
+
+  const onUnarchive = (id: number) => {
+    try { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); } catch (e) { console.warn('LayoutAnimation unavailable:', (e as Error).message); }
+    setArchivedIds(prev => { const next = new Set(prev); next.delete(id); return next; });
+    Haptics.selectionAsync().catch(() => {});
   };
 
   // Handle deletion requested from detail screen via navigation params
@@ -268,15 +291,7 @@ export default function ReceiptsScreen() {
     scheduleDeletion(id);
   };
 
-  const onShareReceipt = async (r: Receipt) => {
-    try {
-      const merchant = r.merchant || 'Receipt';
-      const total = r.total == null ? '' : `$${r.total}`;
-      const dateStr = r.purchased_at || '';
-      await Share.share({ message: `${merchant} ${total ? '• ' + total : ''} ${dateStr ? '• ' + dateStr : ''}` });
-      try { await Haptics.selectionAsync(); } catch {}
-  } catch (e) { console.warn('Optional animation error:', (e as Error).message); }
-  };
+  // Share action removed in favor of Archive
 
   const onPickAndIngest = async () => {
     try {
@@ -350,25 +365,32 @@ export default function ReceiptsScreen() {
       </View>
     );
   } else {
+    const active = items.filter(x => !archivedIds.has(x.id));
     content = (
       <FlatList
-        data={items}
+        data={active}
         refreshing={loading}
         onRefresh={load}
-        keyExtractor={x => String(x.id)}
+        keyExtractor={(x) => String(x.id)}
         contentContainerStyle={styles.listContent}
+        ListHeaderComponent={archivedIds.size > 0 ? (
+          <Pressable onPress={() => setArchivedOpen(true)} style={styles.archivedChip} accessibilityRole="button" accessibilityLabel="Open archived receipts">
+            <Ionicons name="archive" size={16} color="#fff" />
+            <Text style={styles.archivedChipText}>Archived ({archivedIds.size})</Text>
+          </Pressable>
+        ) : null}
         renderItem={({ item }) => {
           const showAbs = absoluteDateIds.has(item.id);
           const dateDisplay = showAbs ? formatAbsolute(item.purchased_at) : relativeDate(item.purchased_at);
           const merchant = item.merchant || 'Unknown';
           return (
             <Swipeable
-              renderLeftActions={SwipeActionLeft}
+              renderLeftActions={() => <SwipeActionLeft archived={false} />}
               renderRightActions={SwipeActionRight}
               overshootLeft={false}
               overshootRight={false}
               onSwipeableOpen={(direction: any) => {
-                if (direction === 'left') onShareReceipt(item);
+                if (direction === 'left') onArchive(item.id);
                 else onDelete(item.id);
               }}
             >
@@ -389,6 +411,57 @@ export default function ReceiptsScreen() {
   return (
     <View style={styles.c}>
       {content}
+      {/* Archived modal */}
+      <Modal visible={archivedOpen} animationType="fade" transparent onRequestClose={() => setArchivedOpen(false)}>
+        <TouchableWithoutFeedback onPress={() => setArchivedOpen(false)}>
+          <View style={styles.modalBackdrop}>
+            <TouchableWithoutFeedback>
+              <SafeAreaView style={styles.modalSheet}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Archived</Text>
+                  <Pressable onPress={() => setArchivedOpen(false)} accessibilityLabel="Close archived">
+                    <Text style={styles.modalClose}>Close</Text>
+                  </Pressable>
+                </View>
+                <GestureHandlerRootView style={{ flex: 1 }}>
+                  <FlatList
+                    style={{ flex: 1 }}
+                    data={items.filter(x => archivedIds.has(x.id))}
+                    keyExtractor={(x) => String(x.id)}
+                    contentContainerStyle={styles.modalBody}
+                    ListEmptyComponent={<Text style={{ color: '#64748b' }}>No archived receipts</Text>}
+                    renderItem={({ item }) => {
+                      const showAbs = absoluteDateIds.has(item.id);
+                      const dateDisplay = showAbs ? formatAbsolute(item.purchased_at) : relativeDate(item.purchased_at);
+                      const merchant = item.merchant || 'Unknown';
+                      return (
+                        <Swipeable
+                          renderLeftActions={() => <SwipeActionLeft archived />}
+                          renderRightActions={SwipeActionRight}
+                          overshootLeft={false}
+                          overshootRight={false}
+                          onSwipeableOpen={(direction: any) => {
+                            if (direction === 'left') onUnarchive(item.id);
+                            else onDelete(item.id);
+                          }}
+                        >
+                          <ReceiptItem
+                            item={item}
+                            merchant={merchant}
+                            dateDisplay={dateDisplay}
+                            onPress={() => {}}
+                            onToggleDate={() => toggleDateMode(item.id)}
+                          />
+                        </Swipeable>
+                      );
+                    }}
+                  />
+                </GestureHandlerRootView>
+              </SafeAreaView>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
 
       {/* Floating Action Button */}
       <Pressable accessibilityRole="button" accessibilityLabel="Pick and ingest receipt" onPress={onPickAndIngest} style={styles.fab}>
@@ -421,7 +494,7 @@ const styles = StyleSheet.create({
   c: { flex: 1, backgroundColor: '#f1f5f9' },
   listContent: { padding: 12, paddingBottom: 120 },
   touchWrap: { borderRadius: 14 },
-  itemCard: { padding: 12, borderRadius: 14, backgroundColor: '#fff', marginBottom: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: '#e2e8f0',
+  itemCard: { padding: 12, borderRadius: 18, backgroundColor: '#fff', marginBottom: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: '#e2e8f0',
     shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
   row: { flexDirection: 'row', alignItems: 'center' },
   m: { fontWeight: '600' },
@@ -442,16 +515,27 @@ const styles = StyleSheet.create({
   emptyTitle: { marginTop: 12, fontSize: 18, fontWeight: '700', color: '#334155' },
   emptyText: { marginTop: 6, color: '#64748b' },
   swipeAction: { flex: 1, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'flex-end', marginVertical: 6 },
-  swipeBtn: { backgroundColor: '#ef4444', height: '88%', minWidth: 76, paddingHorizontal: 16, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginRight: 8,
+  swipeActionRightWrap: { flex: 1, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'flex-end', marginVertical: 6 },
+  swipeActionLeftWrap: { flex: 1, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'flex-start', marginVertical: 6 },
+  swipePillDanger: { backgroundColor: '#ef4444', height: 44, minWidth: 56, paddingHorizontal: 16, borderRadius: 999, justifyContent: 'center', alignItems: 'center', marginRight: 12,
     shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
-  swipeActionLeft: { flex: 1, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'flex-start', marginVertical: 6 },
-  swipeLeftBtn: { backgroundColor: '#3b82f6', height: '88%', minWidth: 76, paddingHorizontal: 16, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginLeft: 8,
+  swipePillPrimary: { backgroundColor: '#3b82f6', height: 44, minWidth: 56, paddingHorizontal: 16, borderRadius: 999, justifyContent: 'center', alignItems: 'center', marginLeft: 12,
     shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
-  swipeText: { color: '#fff', fontWeight: '700' },
+  swipePillNeutral: { backgroundColor: '#64748b', height: 44, minWidth: 56, paddingHorizontal: 16, borderRadius: 999, justifyContent: 'center', alignItems: 'center', marginLeft: 12,
+    shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
   undoBar: { position: 'absolute', bottom: 0, left: 0, right: 0, paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#1f2937' },
   undoContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
   undoText: { color: '#f1f5f9', flex: 1, marginRight: 12 },
   undoBtn: { paddingHorizontal: 12, paddingVertical: 6, backgroundColor: '#4f46e5', borderRadius: 4 },
   undoBtnText: { color: '#fff', fontWeight: '700' },
   progressBar: { height: 4, backgroundColor: '#4f46e5', borderRadius: 2 },
+  archivedChip: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', backgroundColor: '#64748b', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 8 },
+  archivedChipText: { color: '#fff', fontWeight: '700', marginLeft: 6 },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
+  modalSheet: { backgroundColor: '#fff', height: '60%', maxHeight: '75%', width: '92%', borderRadius: 16, overflow: 'hidden',
+    shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 8 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#e5e7eb' },
+  modalTitle: { fontSize: 18, fontWeight: '700' },
+  modalClose: { color: '#4f46e5', fontWeight: '600' },
+  modalBody: { padding: 16 },
 });
