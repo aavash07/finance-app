@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, Button, StyleSheet, Alert } from 'react-native';
+import { View, Text, StyleSheet, Alert } from 'react-native';
+import PillButton from '../components/PillButton';
 import { FinanceKitClient, generateEd25519Keypair } from '@financekit/rn-sdk';
 import { useAppState } from '../context/AppState';
 
@@ -70,10 +71,10 @@ export default function DeviceSetupScreen() {
   return (
     <View style={styles.c}>
       <Text style={styles.t}>Device Setup</Text>
-      <View style={styles.row}><Button title="Ensure Setup" onPress={ensureSetup} disabled={busy} /></View>
-      <View style={styles.row}><Button title="Generate Keypair" onPress={onGen} disabled={busy} /></View>
-      <View style={styles.row}><Button title="Register Device" onPress={onRegister} disabled={busy || !pubB64} /></View>
-      <View style={styles.row}><Button title="Fetch Server Key" onPress={onFetchPem} disabled={busy} /></View>
+  <View style={styles.row}><PillButton title="Ensure Setup" onPress={ensureSetup} disabled={busy} /></View>
+  <View style={styles.row}><PillButton title="Generate Keypair" onPress={onGen} disabled={busy} /></View>
+  <View style={styles.row}><PillButton title="Register Device" onPress={onRegister} disabled={busy || !pubB64} /></View>
+  <View style={styles.row}><PillButton title="Fetch Server Key" onPress={onFetchPem} disabled={busy} /></View>
       <Text>Device ID: {deviceId}</Text>
       <Text>Keys: {pubB64 && privB64 ? 'Present' : 'Missing'}</Text>
       <Text>Registered: {registered ? 'Yes' : 'No'}</Text>

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, Button, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, TextInput, StyleSheet, ScrollView } from 'react-native';
+import PillButton from '../components/PillButton';
 import { useAppState } from '../context/AppState';
  
 export default function SettingsScreen() {
@@ -23,8 +24,8 @@ export default function SettingsScreen() {
       <TextInput style={styles.i} value={p} onChangeText={setP} secureTextEntry />
       <Text>Device ID</Text>
       <TextInput style={styles.i} value={d} onChangeText={setD} />
-      <View style={styles.row}><Button title="Save" onPress={onSave} /></View>
-      <View style={styles.row}><Button title="Log out" color="#dc2626" onPress={onLogout} /></View>
+  <View style={styles.row}><PillButton title="Save" onPress={onSave} /></View>
+  <View style={styles.row}><PillButton title="Log out" onPress={onLogout} color="#dc2626" /></View>
   {/* Device Setup and Receipts are available via bottom tabs now */}
     </ScrollView>
   );

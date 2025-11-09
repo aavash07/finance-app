@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Alert, Button } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Alert } from 'react-native';
+import PillButton from '../components/PillButton';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/AppNavigator';
 import { useNavigation } from '@react-navigation/native';
@@ -14,7 +15,7 @@ function hasData(b: DecryptResponse | null): b is { data: Record<string, unknown
 
 export default function ReceiptDetailScreen({ route }: Readonly<Props>) {
   const { id } = route.params;
-  const { receipts, baseUrl, authHeaders, fetchWithAuth, removeReceipt } = useAppState();
+  const { receipts } = useAppState();
   const navigation = useNavigation<any>();
   const [body, setBody] = useState<DecryptResponse | null>(null);
 
@@ -83,7 +84,7 @@ export default function ReceiptDetailScreen({ route }: Readonly<Props>) {
             </View>
           ) : null}
           <Text style={styles.meta}>Processed: {formatDateTime(processedAt)}</Text>
-          <View style={styles.deleteBtn}><Button title="Delete" color="#ef4444" onPress={onDelete} /></View>
+          <View style={styles.deleteBtn}><PillButton title="Delete" color="#ef4444" onPress={onDelete} /></View>
         </View>
       ) : (
         <Text>No local data for this receipt. Ingest from this device to cache it for offline viewing.</Text>
