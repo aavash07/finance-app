@@ -8,6 +8,7 @@ import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/nativ
 import { Ionicons } from '@expo/vector-icons';
 // Haptics (now installed) – static import for type safety
 import * as Haptics from 'expo-haptics';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // --- Local expandable FAB stack component ---
 function FabStack({ onCamera, onLibrary }: Readonly<{ onCamera: () => Promise<void> | void; onLibrary: () => Promise<void> | void }>) {
@@ -211,9 +212,29 @@ export default function ReceiptsScreen() {
   const [items, setItems] = useState<Receipt[]>([]);
   const itemsRef = useRef(items);
   const [loading, setLoading] = useState(false);
-  // Archived receipts (local UI state)
+  const [firstLoadComplete, setFirstLoadComplete] = useState(false);
+  // Archived receipts (persisted UI state)
   const [archivedIds, setArchivedIds] = useState<Set<number>>(new Set());
   const [archivedOpen, setArchivedOpen] = useState(false);
+  const ARCHIVE_KEY = 'archived_receipt_ids_v1';
+  // Load archived IDs once on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(ARCHIVE_KEY);
+        if (raw) {
+          const arr = JSON.parse(raw);
+          if (Array.isArray(arr)) {
+            // Normalize to numbers and filter out non-finite values
+            setArchivedIds(new Set(arr.map(Number).filter((n: number) => Number.isFinite(n))));
+          }
+        }
+      } catch {/* ignore */}
+    })();
+  }, []);
+  const persistArchived = React.useCallback(async (ids: Set<number>) => {
+    try { await AsyncStorage.setItem(ARCHIVE_KEY, JSON.stringify(Array.from(ids))); } catch {/* ignore */}
+  }, []);
 
   // Header chip similar to Analytics headerRight
   const HeaderRight = React.useCallback(() => {
@@ -238,10 +259,15 @@ export default function ReceiptsScreen() {
   const load = async () => {
     setLoading(true);
     try {
-  const r = await fetchWithAuth(`${baseUrl.replace(/\/$/, '')}/api/v1/receipts`, { headers: authHeaders });
+      const r = await fetchWithAuth(`${baseUrl.replace(/\/$/, '')}/api/v1/receipts`, { headers: authHeaders });
       const body = await r.json();
       if (!r.ok) throw body;
-      setItems(body.results || body.items || []);
+      let list: any[] = body.results || body.items || [];
+      if (!Array.isArray(list)) list = [];
+      // Normalize id to number for consistent archivedId matching
+      const normalized = list.map(rec => ({ ...rec, id: Number(rec.id) })) as Receipt[];
+      setItems(normalized);
+      setFirstLoadComplete(true);
     } catch (e: any) {
       try {
         // Offline fallback: use locally cached receipts
@@ -252,6 +278,7 @@ export default function ReceiptsScreen() {
           purchased_at: rc.derived?.date_str || ''
         }));
         setItems(cached as any);
+        setFirstLoadComplete(true);
         console.warn('Receipts load failed, using offline cache:', e?.detail || e?.message || e);
       } catch (error_) {
         console.warn('Offline cache load failed:', error_);
@@ -329,6 +356,7 @@ export default function ReceiptsScreen() {
       if (!prev.has(id)) return prev;
       const next = new Set(prev);
       next.delete(id);
+      persistArchived(next);
       return next;
     });
     // Haptic feedback (non-blocking)
@@ -339,14 +367,18 @@ export default function ReceiptsScreen() {
 
   const onArchive = (id: number) => {
     try { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); } catch (e) { console.warn('LayoutAnimation unavailable:', (e as Error).message); }
-    setArchivedIds(prev => new Set(prev).add(id));
+    setArchivedIds(prev => {
+      const next = new Set(prev).add(id);
+      persistArchived(next);
+      return next;
+    });
     // Light haptic
     Haptics.selectionAsync().catch(() => {});
   };
 
   const onUnarchive = (id: number) => {
     try { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); } catch (e) { console.warn('LayoutAnimation unavailable:', (e as Error).message); }
-    setArchivedIds(prev => { const next = new Set(prev); next.delete(id); return next; });
+  setArchivedIds(prev => { const next = new Set(prev); next.delete(id); persistArchived(next); return next; });
     Haptics.selectionAsync().catch(() => {});
   };
 
@@ -450,6 +482,20 @@ export default function ReceiptsScreen() {
   }, [loading, items.length, shimmerAnim]);
 
   const shimmerBg = shimmerAnim.interpolate({ inputRange: [0, 0.5, 1], outputRange: ['#e2e8f0', '#f8fafc', '#e2e8f0'] });
+  // Optional prune ONLY after first successful load and when there are items; skip on empty to avoid wiping persisted archive set
+  useEffect(() => {
+    if (!firstLoadComplete) return;
+    if (loading) return;
+    if (items.length === 0) return; // nothing to compare yet
+    // If an archived id no longer exists in items, assume it was permanently deleted and drop it
+    const existingIds = new Set(items.map(r => r.id));
+    const stillValid = Array.from(archivedIds).filter(id => existingIds.has(id));
+    if (stillValid.length !== archivedIds.size) {
+      const next = new Set(stillValid);
+      setArchivedIds(next);
+      persistArchived(next);
+    }
+  }, [firstLoadComplete, loading, items, archivedIds, persistArchived]);
 
   let content: React.ReactNode;
   if (loading && items.length === 0) {

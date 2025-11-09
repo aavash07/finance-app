@@ -1,9 +1,11 @@
-import React, { useMemo, useState, useLayoutEffect, useCallback } from 'react';
+import React, { useMemo, useState, useLayoutEffect, useCallback, useEffect } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, Modal, SafeAreaView, Alert, Share, TouchableWithoutFeedback } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { useAppState } from '../context/AppState';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 type Metric = { label: string; value: string };
 
@@ -27,6 +29,64 @@ type DateFilter = 'ALL' | 'L3' | 'L6' | 'YTD';
 
 function monthStart(d: Date): Date { return new Date(d.getFullYear(), d.getMonth(), 1); }
 function addMonths(d: Date, delta: number): Date { return new Date(d.getFullYear(), d.getMonth() + delta, 1); }
+
+// Helper: human label for archived mode
+type ArchivedMode = 'ALL' | 'ACTIVE' | 'ARCHIVED';
+function archivedModeLabel(v: ArchivedMode): string {
+  switch (v) {
+    case 'ACTIVE': return 'Active Only';
+    case 'ARCHIVED': return 'Archived Only';
+    default: return 'All Receipts';
+  }
+}
+
+// Pure filter function to keep component complexity low
+function filterReceipts(baseList: any[], opts: {
+  dateFilter: DateFilter;
+  currencyFilter: string;
+  q: string;
+  minAmt: string;
+  maxAmt: string;
+  onlyWithItems: boolean;
+  archivedMode: 'ALL' | 'ACTIVE' | 'ARCHIVED';
+  archivedIds: Set<number>;
+}): any[] {
+  const { dateFilter, currencyFilter, q, minAmt, maxAmt, onlyWithItems, archivedMode, archivedIds } = opts;
+  // Date filtering
+  let minDate: Date | null = null;
+  const now = new Date();
+  if (dateFilter === 'L3') minDate = addMonths(monthStart(now), -2); // include current month -> 3 months span
+  if (dateFilter === 'L6') minDate = addMonths(monthStart(now), -5);
+  if (dateFilter === 'YTD') minDate = new Date(now.getFullYear(), 0, 1);
+
+  const qLower = q.trim().toLowerCase();
+  const minV = minAmt.trim() ? Number.parseFloat(minAmt.trim()) : Number.NaN;
+  const maxV = maxAmt.trim() ? Number.parseFloat(maxAmt.trim()) : Number.NaN;
+
+  const matches = (r: any) => {
+    const d: any = r?.data || r?.derived || {};
+    const dateStr = safeStr(d.date_str) || safeStr(d.date) || r.updatedAt || '';
+    const dt = new Date(dateStr);
+    const total = safeNum(d.total);
+    const itemsArr: any[] = Array.isArray(d.items) ? d.items : [];
+    const merchant = safeStr(d.merchant).toLowerCase();
+    const itemHit = qLower ? itemsArr.some(it => ((safeStr(it?.desc) || safeStr(it?.name)).toLowerCase().includes(qLower))) : true;
+
+    const isDateOk = !minDate || dt >= minDate;
+    const isCurrencyOk = currencyFilter === 'ALL' || safeStr(d.currency) === currencyFilter;
+    const isQueryOk = !qLower || merchant.includes(qLower) || itemHit;
+    const isAmtOk = (Number.isNaN(minV) || total >= minV) && (Number.isNaN(maxV) || total <= maxV);
+    const isItemsOk = !onlyWithItems || itemsArr.length > 0;
+
+    // Archived mode filtering
+    let isArchiveOk = true;
+    const idNum = Number(r.id);
+    if (archivedMode === 'ACTIVE') isArchiveOk = !archivedIds.has(idNum);
+    else if (archivedMode === 'ARCHIVED') isArchiveOk = archivedIds.has(idNum);
+    return isDateOk && isCurrencyOk && isQueryOk && isAmtOk && isItemsOk && isArchiveOk;
+  };
+  return baseList.filter(matches);
+}
 
 function Bar({ pct, color }: Readonly<{ pct: number; color?: string }>) {
   const w = Math.max(2, Math.min(100, pct));
@@ -65,40 +125,28 @@ export default function AnalyticsScreen({ navigation }: any) {
   const [minAmt, setMinAmt] = useState('');
   const [maxAmt, setMaxAmt] = useState('');
   const [onlyWithItems, setOnlyWithItems] = useState(false);
+  // Archived filter: ALL (ignore), ACTIVE (exclude archived), ARCHIVED (only archived)
+  const [archivedMode, setArchivedMode] = useState<ArchivedMode>('ALL');
+  const [archivedIds, setArchivedIds] = useState<Set<number>>(new Set());
+  const loadArchivedIds = useCallback(async () => {
+    try {
+      const raw = await AsyncStorage.getItem('archived_receipt_ids_v1');
+      if (!raw) { setArchivedIds(new Set()); return; }
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) setArchivedIds(new Set(arr.map(Number).filter((n: number) => Number.isFinite(n))));
+      else setArchivedIds(new Set());
+    } catch { setArchivedIds(new Set()); }
+  }, []);
+  // Initial
+  useEffect(() => { loadArchivedIds(); }, [loadArchivedIds]);
+  // Refresh when the screen gains focus (captures changes from Receipts screen in same session)
+  useFocusEffect(useCallback(() => { loadArchivedIds(); }, [loadArchivedIds]));
   // Removed collapsible inline filters; using FAB + modal instead
   const [filtersModalOpen, setFiltersModalOpen] = useState(false);
 
-  const filtered = useMemo(() => {
-    // Date filtering
-    let minDate: Date | null = null;
-    const now = new Date();
-    if (dateFilter === 'L3') minDate = addMonths(monthStart(now), -2); // include current month -> 3 months span
-    if (dateFilter === 'L6') minDate = addMonths(monthStart(now), -5);
-    if (dateFilter === 'YTD') minDate = new Date(now.getFullYear(), 0, 1);
-
-    const qLower = q.trim().toLowerCase();
-  const minV = minAmt.trim() ? Number.parseFloat(minAmt.trim()) : Number.NaN;
-  const maxV = maxAmt.trim() ? Number.parseFloat(maxAmt.trim()) : Number.NaN;
-
-    const matches = (r: any) => {
-      const d: any = r?.data || r?.derived || {};
-      const dateStr = safeStr(d.date_str) || safeStr(d.date) || r.updatedAt || '';
-      const dt = new Date(dateStr);
-      const total = safeNum(d.total);
-      const itemsArr: any[] = Array.isArray(d.items) ? d.items : [];
-      const merchant = safeStr(d.merchant).toLowerCase();
-      const itemHit = qLower ? itemsArr.some(it => ((safeStr(it?.desc) || safeStr(it?.name)).toLowerCase().includes(qLower))) : true;
-
-      const isDateOk = !minDate || dt >= minDate;
-      const isCurrencyOk = currencyFilter === 'ALL' || safeStr(d.currency) === currencyFilter;
-      const isQueryOk = !qLower || merchant.includes(qLower) || itemHit;
-      const isAmtOk = (Number.isNaN(minV) || total >= minV) && (Number.isNaN(maxV) || total <= maxV);
-      const isItemsOk = !onlyWithItems || itemsArr.length > 0;
-
-      return isDateOk && isCurrencyOk && isQueryOk && isAmtOk && isItemsOk;
-    };
-    return baseList.filter(matches);
-  }, [baseList, dateFilter, currencyFilter, q, minAmt, maxAmt, onlyWithItems]);
+  const filtered = useMemo(() => filterReceipts(baseList, {
+    dateFilter, currencyFilter, q, minAmt, maxAmt, onlyWithItems, archivedMode, archivedIds
+  }), [baseList, dateFilter, currencyFilter, q, minAmt, maxAmt, onlyWithItems, archivedMode, archivedIds]);
 
   const { kpis, byMonth, byMerchant, byCurrency, byCategory, csv } = useMemo(() => {
     const totals: number[] = [];
@@ -160,7 +208,7 @@ export default function AnalyticsScreen({ navigation }: any) {
       .map(([k, v]) => ({ key: k, value: v }));
 
     // CSV (basic): date,merchant,currency,total
-    const rows = filtered.map(r => {
+    const rows = filtered.map((r: any) => {
       const d: any = r?.data || r?.derived || {};
       const dateStr = safeStr(d.date_str) || safeStr(d.date) || r.updatedAt || '';
       const merchant = safeStr(d.merchant).replaceAll(',', ' ');
@@ -263,11 +311,12 @@ export default function AnalyticsScreen({ navigation }: any) {
       minAmt={minAmt}
       maxAmt={maxAmt}
       onlyWithItems={onlyWithItems}
+      archivedMode={archivedMode}
       total={baseList.length}
       filtered={filtered.length}
       onOpen={() => setFiltersModalOpen(true)}
     />
-  ), [dateFilter, currencyFilter, q, minAmt, maxAmt, onlyWithItems, baseList.length, filtered.length]);
+  ), [dateFilter, currencyFilter, q, minAmt, maxAmt, onlyWithItems, archivedMode, baseList.length, filtered.length]);
 
   useLayoutEffect(() => {
     navigation?.setOptions?.({ headerTitle: 'Analytics', headerRight: HeaderRight });
@@ -359,6 +408,8 @@ export default function AnalyticsScreen({ navigation }: any) {
         setMaxAmt={setMaxAmt}
         onlyWithItems={onlyWithItems}
         setOnlyWithItems={setOnlyWithItems}
+        archivedMode={archivedMode}
+        setArchivedMode={setArchivedMode}
       />
     </View>
   );
@@ -573,6 +624,46 @@ function categorize(desc: string): string {
   return 'Other';
 }
 
+// Compute insights: largest receipt in last 30d, top category this month, and latest MoM
+function computeInsightsData(filtered: any[], byMonth: { key: string; value: number }[]) {
+  const now = new Date();
+  const last30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  let largestReceipt30d: { date: string; merchant: string; total: number } | null = null;
+  for (const r of filtered) {
+    const d: any = r?.data || r?.derived || {};
+  const dateStr = safeStr(d.date_str) || safeStr(d.date) || (r as any).updatedAt || '';
+    const dt = new Date(dateStr);
+    if (dt >= last30) {
+      const total = safeNum(d.total);
+      if (!largestReceipt30d || total > largestReceipt30d.total) {
+        largestReceipt30d = { date: dateStr, merchant: safeStr(d.merchant), total };
+      }
+    }
+  }
+
+  const thisMonthStart = monthStart(now);
+  const catTotalsThisMonth: Record<string, number> = {};
+  for (const r of filtered) {
+    const d: any = r?.data || r?.derived || {};
+  const dateStr = safeStr(d.date_str) || safeStr(d.date) || (r as any).updatedAt || '';
+    const dt = new Date(dateStr);
+    if (dt >= thisMonthStart && Array.isArray(d.items)) {
+      for (const it of d.items) {
+        const desc = safeStr(it?.desc) || safeStr(it?.name);
+        const qty = safeNum(it?.qty) || 1;
+        const price = safeNum(it?.price);
+        const amount = Math.max(0, qty * price);
+        const cat = categorize(desc);
+        catTotalsThisMonth[cat] = (catTotalsThisMonth[cat] || 0) + amount;
+      }
+    }
+  }
+  const topCatThisMonth = Object.entries(catTotalsThisMonth).sort((a,b)=>b[1]-a[1])[0];
+
+  const latestMoM = byMonth.length >= 2 ? ((byMonth[0].value - byMonth[1].value) / (byMonth[1].value || 1)) * 100 : 0;
+  return { largestReceipt30d, topCatThisMonth, latestMoM };
+}
+
 // -------- Subcomponents ---------
 type FiltersPanelProps = {
   currencies: string[];
@@ -588,11 +679,14 @@ type FiltersPanelProps = {
   setMaxAmt: (v: string) => void;
   onlyWithItems: boolean;
   setOnlyWithItems: (v: boolean) => void;
+  archivedMode: 'ALL' | 'ACTIVE' | 'ARCHIVED';
+  setArchivedMode: (v: 'ALL' | 'ACTIVE' | 'ARCHIVED') => void;
 };
 
-function FiltersPanel({ currencies, dateFilter, setDateFilter, currencyFilter, setCurrencyFilter, q, setQ, minAmt, setMinAmt, maxAmt, setMaxAmt, onlyWithItems, setOnlyWithItems }: Readonly<FiltersPanelProps>) {
+function FiltersPanel({ currencies, dateFilter, setDateFilter, currencyFilter, setCurrencyFilter, q, setQ, minAmt, setMinAmt, maxAmt, setMaxAmt, onlyWithItems, setOnlyWithItems, archivedMode, setArchivedMode }: Readonly<FiltersPanelProps>) {
   return (
     <View style={styles.filters}>
+      {/* Date range */}
       <View style={styles.pillsRow}>
         {(['ALL','L3','L6','YTD'] as DateFilter[]).map(v => (
           <Pressable key={v} onPress={() => setDateFilter(v)} style={[styles.pill, dateFilter === v && styles.pillActive]}>
@@ -600,6 +694,7 @@ function FiltersPanel({ currencies, dateFilter, setDateFilter, currencyFilter, s
           </Pressable>
         ))}
       </View>
+      {/* Currency */}
       <View style={styles.pillsRow}>
         <Pressable key={'ALL'} onPress={() => setCurrencyFilter('ALL')} style={[styles.pill, currencyFilter === 'ALL' && styles.pillActive]}>
           <Text style={[styles.pillText, currencyFilter === 'ALL' && styles.pillTextActive]}>All</Text>
@@ -610,6 +705,7 @@ function FiltersPanel({ currencies, dateFilter, setDateFilter, currencyFilter, s
           </Pressable>
         ))}
       </View>
+      {/* Search + amounts + items */}
       <View style={[styles.pillsRow, { alignItems: 'center' }] }>
         <TextInput
           placeholder="Search merchant/items"
@@ -636,12 +732,23 @@ function FiltersPanel({ currencies, dateFilter, setDateFilter, currencyFilter, s
           <Text style={[styles.pillText, onlyWithItems && styles.pillTextActive]}>Has items</Text>
         </Pressable>
       </View>
+      {/* Archived */}
+      <View style={styles.pillsRow}>
+        {(['ALL','ACTIVE','ARCHIVED'] as ArchivedMode[]).map(v => {
+          const label = archivedModeLabel(v);
+          return (
+            <Pressable key={v} onPress={() => setArchivedMode(v)} style={[styles.pill, archivedMode === v && styles.pillActive]}>
+              <Text style={[styles.pillText, archivedMode === v && styles.pillTextActive]}>{label}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
     </View>
   );
 }
 
 // Summary chip showing currently active filters; press opens modal
-function ActiveFiltersSummary({ dateFilter, currencyFilter, q, minAmt, maxAmt, onlyWithItems, total, filtered, onOpen }: Readonly<{ dateFilter: DateFilter; currencyFilter: string; q: string; minAmt: string; maxAmt: string; onlyWithItems: boolean; total: number; filtered: number; onOpen: () => void }>) {
+function ActiveFiltersSummary({ dateFilter, currencyFilter, q, minAmt, maxAmt, onlyWithItems, archivedMode, total, filtered, onOpen }: Readonly<{ dateFilter: DateFilter; currencyFilter: string; q: string; minAmt: string; maxAmt: string; onlyWithItems: boolean; archivedMode: ArchivedMode; total: number; filtered: number; onOpen: () => void }>) {
   const parts: string[] = [];
   if (dateFilter !== 'ALL') parts.push(dateFilter);
   if (currencyFilter !== 'ALL') parts.push(currencyFilter);
@@ -649,6 +756,7 @@ function ActiveFiltersSummary({ dateFilter, currencyFilter, q, minAmt, maxAmt, o
   if (minAmt.trim()) parts.push(`min:${minAmt.trim()}`);
   if (maxAmt.trim()) parts.push(`max:${maxAmt.trim()}`);
   if (onlyWithItems) parts.push('has-items');
+  if (archivedMode === 'ACTIVE') parts.push('active-only'); else if (archivedMode === 'ARCHIVED') parts.push('archived-only');
   const countPart = `${filtered}/${total}`;
   const label = parts.length ? parts.join(' · ') : 'none';
   return (
@@ -671,15 +779,16 @@ function FiltersModal({ visible, onClose, ...panelProps }: Readonly<FiltersModal
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>Filters</Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
-                  <Pressable disabled={!(panelProps.dateFilter !== 'ALL' || panelProps.currencyFilter !== 'ALL' || panelProps.q.trim() || panelProps.minAmt.trim() || panelProps.maxAmt.trim() || panelProps.onlyWithItems)} onPress={() => {
+                  <Pressable disabled={!(panelProps.dateFilter !== 'ALL' || panelProps.currencyFilter !== 'ALL' || panelProps.q.trim() || panelProps.minAmt.trim() || panelProps.maxAmt.trim() || panelProps.onlyWithItems || panelProps.archivedMode !== 'ALL')} onPress={() => {
                     panelProps.setDateFilter('ALL');
                     panelProps.setCurrencyFilter('ALL');
                     panelProps.setQ('');
                     panelProps.setMinAmt('');
                     panelProps.setMaxAmt('');
                     panelProps.setOnlyWithItems(false);
+                    panelProps.setArchivedMode('ALL');
                   }}>
-                    <Text style={[styles.modalClose, { color: (panelProps.dateFilter !== 'ALL' || panelProps.currencyFilter !== 'ALL' || panelProps.q.trim() || panelProps.minAmt.trim() || panelProps.maxAmt.trim() || panelProps.onlyWithItems) ? '#ef4444' : '#94a3b8' }]}>Clear All</Text>
+                    <Text style={[styles.modalClose, { color: (panelProps.dateFilter !== 'ALL' || panelProps.currencyFilter !== 'ALL' || panelProps.q.trim() || panelProps.minAmt.trim() || panelProps.maxAmt.trim() || panelProps.onlyWithItems || panelProps.archivedMode !== 'ALL') ? '#ef4444' : '#94a3b8' }]}>Clear All</Text>
                   </Pressable>
                   <Pressable onPress={onClose}><Text style={styles.modalClose}>Close</Text></Pressable>
                 </View>
