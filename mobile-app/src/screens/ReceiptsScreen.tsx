@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, Pressable, Animated, Easing } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, Pressable, Animated, Easing, Share, LayoutAnimation, Platform, UIManager } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
 import * as ImagePicker from 'expo-image-picker';
 import { FinanceKitClient, generateDEK, mintGrantJWT, rsaOaepWrapDek } from '@financekit/rn-sdk';
 import { useAppState } from '../context/AppState';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+// Haptics (now installed) – static import for type safety
+import * as Haptics from 'expo-haptics';
 
 type Receipt = { id: number; merchant?: string; total?: number; purchased_at?: string };
 
@@ -67,11 +69,19 @@ function amountColor(total: number | undefined) {
   return '#dc2626';
 }
 
-const SwipeAction = () => (
+const SwipeActionRight = () => (
   <View style={styles.swipeAction}>
-    <Pressable style={styles.swipeBtn}> 
+    <View style={styles.swipeBtn}> 
       <Text style={styles.swipeText}>Delete</Text>
-    </Pressable>
+    </View>
+  </View>
+);
+
+const SwipeActionLeft = () => (
+  <View style={styles.swipeActionLeft}>
+    <View style={styles.swipeLeftBtn}>
+      <Text style={styles.swipeText}>Share</Text>
+    </View>
   </View>
 );
 
@@ -125,6 +135,7 @@ function ReceiptItem({ item, merchant, dateDisplay, onPress, onToggleDate }: Rea
 
 export default function ReceiptsScreen() {
   const navigation = useNavigation<any>();
+  const route = useRoute<any>();
   const { baseUrl, authHeaders, deviceId, pem, privB64, setReceiptDekWrap, receipts, setReceiptData, fetchWithAuth, removeReceipt } = useAppState();
   const api = useMemo(() => new FinanceKitClient(baseUrl, fetchWithAuth), [baseUrl, fetchWithAuth]);
   const [items, setItems] = useState<Receipt[]>([]);
@@ -157,9 +168,15 @@ export default function ReceiptsScreen() {
 
   useEffect(() => { load(); }, [baseUrl]);
   useEffect(() => { itemsRef.current = items; }, [items]);
+  // Enable LayoutAnimation on Android
+  useEffect(() => {
+    if (Platform.OS === 'android' && (UIManager as any).setLayoutAnimationEnabledExperimental) {
+      (UIManager as any).setLayoutAnimationEnabledExperimental(true);
+    }
+  }, []);
 
   // Pending (soft) deletions with undo window
-  const [pending, setPending] = useState<{ id: number; merchant: string; timer: any }[]>([]);
+  const [pending, setPending] = useState<{ id: number; merchant: string; timer: any; item: Receipt }[]>([]);
   const pendingRef = useRef(pending);
   useEffect(() => { pendingRef.current = pending; }, [pending]);
   const UNDO_MS = 5000;
@@ -170,10 +187,25 @@ export default function ReceiptsScreen() {
     Animated.timing(progressAnim, { toValue: 1, duration: UNDO_MS, easing: Easing.linear, useNativeDriver: false }).start();
   };
   const scheduleDeletion = (id: number) => {
-    const target = items.find(x => x.id === id);
-    if (!target) return;
-    // Optimistically remove from list
-    setItems(itemsRef.current.filter(x => x.id !== id));
+    // Work on a local snapshot to avoid race conditions between multiple setState calls
+    let snapshot = itemsRef.current;
+    let target = snapshot.find(x => x.id === id);
+    if (!target) {
+      const rLocal = receipts[String(id)];
+      if (!rLocal) return; // nothing to delete
+      target = {
+        id: rLocal.id,
+        merchant: rLocal.derived?.merchant || rLocal.data?.merchant || 'Receipt',
+        total: rLocal.derived?.total || rLocal.data?.total || 0,
+        purchased_at: rLocal.derived?.date_str || ''
+      };
+      // Treat as if part of the current list for optimistic removal
+      snapshot = [...snapshot, target];
+    }
+    // Optimistically remove target (ensure single instance removed)
+    const afterRemoval = snapshot.filter(x => x.id !== id);
+    try { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); } catch (e) { console.warn('LayoutAnimation unavailable:', (e as Error).message); }
+    setItems(afterRemoval);
     // Start countdown animation
     startProgress();
     // Set timer to finalize
@@ -198,36 +230,52 @@ export default function ReceiptsScreen() {
       }
       setPending(pendingRef.current.filter(x => x.id !== id));
     }, UNDO_MS);
-    setPending([...pendingRef.current, { id, merchant: target.merchant || 'Receipt', timer }]);
+    setPending([...pendingRef.current.filter(p => p.id !== id), { id, merchant: target.merchant || 'Receipt', timer, item: target }]);
+    // Haptic feedback (non-blocking)
+    // Fire-and-forget haptic feedback (Promise handled explicitly to satisfy lint)
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+      .catch(e => console.warn('Haptics notification failed:', (e as Error).message));
   };
+
+  // Handle deletion requested from detail screen via navigation params
+  useFocusEffect(
+    React.useCallback(() => {
+      const reqId = route?.params?.scheduleDeleteId;
+      if (reqId) {
+        scheduleDeletion(reqId);
+        // Clear param so it doesn't repeat
+        try { navigation.setParams({ scheduleDeleteId: undefined }); } catch {}
+      }
+    }, [route?.params?.scheduleDeleteId])
+  );
 
   const undoDelete = (id: number) => {
     const entry = pendingRef.current.find(x => x.id === id);
     if (entry) clearTimeout(entry.timer);
     setPending(pendingRef.current.filter(x => x.id !== id));
-    // Restore item from local receipts cache (still present because not permanently deleted yet)
-    const rLocal = receipts[String(id)];
-    if (rLocal) {
-      const restored: Receipt = {
-        id: rLocal.id,
-        merchant: rLocal.derived?.merchant || rLocal.data?.merchant || 'Receipt',
-        total: rLocal.derived?.total || rLocal.data?.total || 0,
-        purchased_at: rLocal.derived?.date_str || ''
-      };
-      const next = [...itemsRef.current, restored];
-      next.sort((a,b)=>b.id-a.id);
+    if (entry?.item) {
+      // Deduplicate before restoring
+      const filtered = itemsRef.current.filter(x => x.id !== id);
+      const next = [...filtered, entry.item].sort((a, b) => b.id - a.id);
       setItems(next);
     }
-    // Reset progress for potential next deletion
     progressAnim.stopAnimation();
     progressAnim.setValue(0);
   };
 
   const onDelete = (id: number) => {
-    Alert.alert('Delete receipt', `Temporarily delete #${id}? You can undo for ${UNDO_MS/1000}s.`, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: () => scheduleDeletion(id) }
-    ]);
+    // Confirm by full swipe; no dialog. Show haptic and schedule deletion.
+    scheduleDeletion(id);
+  };
+
+  const onShareReceipt = async (r: Receipt) => {
+    try {
+      const merchant = r.merchant || 'Receipt';
+      const total = r.total == null ? '' : `$${r.total}`;
+      const dateStr = r.purchased_at || '';
+      await Share.share({ message: `${merchant} ${total ? '• ' + total : ''} ${dateStr ? '• ' + dateStr : ''}` });
+      try { await Haptics.selectionAsync(); } catch {}
+  } catch (e) { console.warn('Optional animation error:', (e as Error).message); }
   };
 
   const onPickAndIngest = async () => {
@@ -315,11 +363,14 @@ export default function ReceiptsScreen() {
           const merchant = item.merchant || 'Unknown';
           return (
             <Swipeable
-              renderLeftActions={SwipeAction}
-              renderRightActions={SwipeAction}
+              renderLeftActions={SwipeActionLeft}
+              renderRightActions={SwipeActionRight}
               overshootLeft={false}
               overshootRight={false}
-              onSwipeableOpen={() => onDelete(item.id)}
+              onSwipeableOpen={(direction: any) => {
+                if (direction === 'left') onShareReceipt(item);
+                else onDelete(item.id);
+              }}
             >
               <ReceiptItem
                 item={item}
@@ -391,7 +442,10 @@ const styles = StyleSheet.create({
   emptyTitle: { marginTop: 12, fontSize: 18, fontWeight: '700', color: '#334155' },
   emptyText: { marginTop: 6, color: '#64748b' },
   swipeAction: { flex: 1, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'flex-end', marginVertical: 6 },
-  swipeBtn: { backgroundColor: '#ef4444', height: '88%', aspectRatio: 1, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginRight: 8,
+  swipeBtn: { backgroundColor: '#ef4444', height: '88%', minWidth: 76, paddingHorizontal: 16, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginRight: 8,
+    shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
+  swipeActionLeft: { flex: 1, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'flex-start', marginVertical: 6 },
+  swipeLeftBtn: { backgroundColor: '#3b82f6', height: '88%', minWidth: 76, paddingHorizontal: 16, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginLeft: 8,
     shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
   swipeText: { color: '#fff', fontWeight: '700' },
   undoBar: { position: 'absolute', bottom: 0, left: 0, right: 0, paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#1f2937' },

@@ -49,20 +49,15 @@ export default function ReceiptDetailScreen({ route }: Readonly<Props>) {
   const onDelete = () => {
     Alert.alert('Delete receipt', `Delete receipt #${id}?`, [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: () => { void (async () => {
-        try {
-          const r = await fetchWithAuth(`${baseUrl.replace(/\/$/, '')}/api/v1/receipts/${id}`, { method: 'DELETE', headers: authHeaders });
-          if (r.status === 204 || r.status === 200) {
-            await removeReceipt(id);
-            navigation.goBack();
-          } else {
-            const body = await r.text();
-            Alert.alert('Error', body || 'Failed to delete');
-          }
-        } catch (e: any) {
-          Alert.alert('Error', e?.message || 'Failed to delete');
-        }
-      })(); } }
+      { text: 'Delete', style: 'destructive', onPress: () => {
+        // Redirect to Receipts list and trigger the same deletion flow used there
+        navigation.reset({
+          index: 0,
+          routes: [
+            { name: 'MainTabs', params: { screen: 'ReceiptsTab', params: { scheduleDeleteId: id, nonce: Date.now() } } as any },
+          ],
+        });
+      } }
     ]);
   };
   return (
@@ -111,4 +106,10 @@ const styles = StyleSheet.create({
   itemMeta: { width: 40, textAlign: 'right', color: '#556' },
   itemPrice: { width: 80, textAlign: 'right' },
   deleteBtn: { marginTop: 12 },
+  undoWrap: { marginTop: 16, backgroundColor: '#1f2937', padding: 12, borderRadius: 6 },
+  undoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
+  undoText: { color: '#f1f5f9', flex: 1, marginRight: 12 },
+  undoBtn: { paddingHorizontal: 12, paddingVertical: 6, backgroundColor: '#4f46e5', borderRadius: 4 },
+  undoBtnText: { color: '#fff', fontWeight: '700' },
+  undoProgress: { height: 4, backgroundColor: '#4f46e5', borderRadius: 2 },
 });
