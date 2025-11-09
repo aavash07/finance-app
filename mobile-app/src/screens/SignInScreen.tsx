@@ -12,21 +12,43 @@ export default function SignInScreen() {
   const [pass, setPass] = useState('');
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
-  const onSignIn = async () => {
+  const parseErrorMessage = async (res: Response): Promise<string> => {
+    let message = `HTTP ${res.status}`;
     try {
-      const res = await fetch(`${baseUrl}/api/v1/auth/token`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: user, password: pass })
-      });
-      if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt || res.statusText);
+      const text = await res.text();
+      if (!text) return message;
+      try {
+        const j = JSON.parse(text);
+        const detail: string | undefined = j.detail || j.error || j.message;
+        if (detail) {
+          if (detail.includes('No active account')) {
+            return 'Incorrect username or password (or account not created yet). Tap "Create an account" first.';
+          }
+          return detail;
+        }
+        if (j.code) return `${j.code}: ${detail || ''}`.trim();
+        return message;
+      } catch {
+        if (text.length < 160) return text;
       }
+    } catch {}
+    return message;
+  };
+
+  const onSignIn = async () => {
+    const url = `${baseUrl.replace(/\/$/, '')}/api/v1/auth/token`;
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: user.trim(), password: pass })
+      });
+      if (!res.ok) throw new Error(await parseErrorMessage(res));
       const j = await res.json();
+      if (!j?.access) throw new Error('Malformed auth response');
       await setTokens(j.access, j.refresh);
-      setUsername(user);
+      setUsername(user.trim());
       setPassword(pass);
-      // Show provisioning screen to handle device setup with a loading UI
       nav.reset({ index: 0, routes: [{ name: 'Provisioning' }] });
     } catch (e: any) {
       Alert.alert('Sign in failed', e?.message || 'Unknown error');
@@ -40,6 +62,7 @@ export default function SignInScreen() {
       <TextInput placeholder="Password" value={pass} onChangeText={setPass} style={styles.input} secureTextEntry />
       <Pressable onPress={onSignIn} style={styles.btn}><Text style={styles.btnText}>Sign in</Text></Pressable>
       <Pressable onPress={() => nav.navigate('SignUp')} style={styles.link}><Text style={styles.linkText}>New here? Create an account</Text></Pressable>
+      <Text style={styles.hint}>Tip: If you see "No active account" just create one first on the sign up screen.</Text>
     </View>
   );
 }
@@ -52,4 +75,5 @@ const styles = StyleSheet.create({
   btnText: { color: '#fff', fontWeight: '700' },
   link: { marginTop: 10, alignItems: 'center' },
   linkText: { color: '#4f46e5', fontWeight: '600' },
+  hint: { marginTop: 14, fontSize: 12, color: '#64748b', textAlign: 'center' },
 });
