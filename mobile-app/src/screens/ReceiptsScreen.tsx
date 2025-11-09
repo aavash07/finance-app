@@ -9,6 +9,76 @@ import { Ionicons } from '@expo/vector-icons';
 // Haptics (now installed) – static import for type safety
 import * as Haptics from 'expo-haptics';
 
+// --- Local expandable FAB stack component ---
+function FabStack({ onCamera, onLibrary }: Readonly<{ onCamera: () => Promise<void> | void; onLibrary: () => Promise<void> | void }>) {
+  const [open, setOpen] = useState(false);
+  const rot = useRef(new Animated.Value(0)).current; // 0 closed, 1 open
+  const offset1 = useRef(new Animated.Value(0)).current; // for first action
+  const offset2 = useRef(new Animated.Value(0)).current; // for second action
+
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    Haptics.selectionAsync().catch(() => {});
+    Animated.parallel([
+      Animated.spring(rot, { toValue: next ? 1 : 0, useNativeDriver: true, friction: 6 }),
+      Animated.spring(offset1, { toValue: next ? -76 : 0, useNativeDriver: true, friction: 6 }),
+      Animated.spring(offset2, { toValue: next ? -140 : 0, useNativeDriver: true, friction: 6 }),
+    ]).start();
+  };
+
+  const rotate = rot.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '45deg'] });
+
+  return (
+    <View pointerEvents="box-none" style={styles.fabStackWrap}>
+      {/* Library FAB */}
+      <Animated.View style={[
+        styles.fabSmallWrap,
+        {
+          transform: [
+            { translateY: offset1 },
+            { scale: rot.interpolate({ inputRange: [0,1], outputRange: [0.01,1] }) }
+          ],
+          opacity: rot.interpolate({ inputRange: [0, 0.01, 1], outputRange: [0, 0, 1] })
+        }
+      ]}> 
+        <Pressable
+          pointerEvents={open ? 'auto' : 'none'}
+          onPress={() => { setOpen(false); Animated.spring(rot, { toValue: 0, useNativeDriver: true }).start(); onLibrary?.(); }}
+          style={[styles.fabSmall, { backgroundColor: '#1f2937' }]} accessibilityLabel="Choose from photos"
+        >
+          <Ionicons name="images" size={22} color="#fff" />
+        </Pressable>
+      </Animated.View>
+      {/* Camera FAB */}
+      <Animated.View style={[
+        styles.fabSmallWrap,
+        {
+          transform: [
+            { translateY: offset2 },
+            { scale: rot.interpolate({ inputRange: [0,1], outputRange: [0.01,1] }) }
+          ],
+          opacity: rot.interpolate({ inputRange: [0, 0.01, 1], outputRange: [0, 0, 1] })
+        }
+      ]}> 
+        <Pressable
+          pointerEvents={open ? 'auto' : 'none'}
+          onPress={() => { setOpen(false); Animated.spring(rot, { toValue: 0, useNativeDriver: true }).start(); onCamera?.(); }}
+          style={[styles.fabSmall, { backgroundColor: '#0f766e' }]} accessibilityLabel="Open camera"
+        >
+          <Ionicons name="camera" size={22} color="#fff" />
+        </Pressable>
+      </Animated.View>
+      {/* Main FAB */}
+      <Pressable accessibilityRole="button" accessibilityLabel="Add receipt" onPress={toggle} style={styles.fab}>
+        <Animated.View style={{ transform: [{ rotate }] }}>
+          <Ionicons name="add" size={28} color="#fff" />
+        </Animated.View>
+      </Pressable>
+    </View>
+  );
+}
+
 type Receipt = { id: number; merchant?: string; total?: number; purchased_at?: string };
 
 // --------- Helpers & Subcomponents (top-level) ---------
@@ -311,19 +381,16 @@ export default function ReceiptsScreen() {
     scheduleDeletion(id);
   };
 
-  // Share action removed in favor of Archive
-
-  const onPickAndIngest = async () => {
+  // Ingestion helpers (gallery & camera)
+  const ingestImage = async (uri: string) => {
+    if (!pem) { Alert.alert('Missing', 'Fetch server key in Device Setup first'); return; }
     try {
-      if (!pem) return Alert.alert('Missing', 'Fetch server key in Device Setup first');
-      const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.9 });
-      if (res.canceled || !res.assets?.length) return;
-      const image = { uri: res.assets[0].uri, name: 'receipt.jpg', type: 'image/jpeg' } as any;
+      const image = { uri, name: 'receipt.jpg', type: 'image/jpeg' } as any;
       const dek = generateDEK(32);
       const dek_wrap_srv = rsaOaepWrapDek(pem, dek);
       const now = Math.floor(Date.now() / 1000);
       const token = await mintGrantJWT(deviceId, privB64, { sub: '1', scope: ['receipt:ingest'], jti: String(now), iat: now, nbf: now - 5, exp: now + 120 });
-  const resp: any = await api.ingestReceipt({ token, dek_wrap_srv, year: new Date().getFullYear(), month: new Date().getMonth() + 1, category: 'Uncategorized', image, authHeaders });
+      const resp: any = await api.ingestReceipt({ token, dek_wrap_srv, year: new Date().getFullYear(), month: new Date().getMonth() + 1, category: 'Uncategorized', image, authHeaders });
       if (resp.receipt_id) {
         const merch = resp?.derived?.merchant || resp?.data?.merchant || 'Receipt';
         const total = resp?.derived?.total || resp?.data?.total || '';
@@ -335,9 +402,27 @@ export default function ReceiptsScreen() {
         Alert.alert('Error', resp?.detail || 'Ingest failed');
       }
     } catch (e: any) {
-      Alert.alert('Error', e?.detail || 'Ingest failed');
+      Alert.alert('Error', e?.detail || e?.message || 'Ingest failed');
     }
   };
+
+  const chooseFromLibrary = async () => {
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.9 });
+    if (res.canceled || !res.assets?.length) return;
+    ingestImage(res.assets[0].uri);
+  };
+
+  const captureAndIngest = async () => {
+    // Request permission first (idempotent)
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) { Alert.alert('Permission needed', 'Camera access is required to take a photo.'); return; }
+    const res = await ImagePicker.launchCameraAsync({ quality: 0.9 });
+    if (res.canceled || !res.assets?.length) return;
+    ingestImage(res.assets[0].uri);
+  };
+
+  // Deprecated: old single FAB handler (kept for reference)
+  // const onFabPress = () => {}; // replaced by FabStack
 
   const isEmpty = !loading && items.length === 0;
 
@@ -477,10 +562,11 @@ export default function ReceiptsScreen() {
         </TouchableWithoutFeedback>
       </Modal>
 
-      {/* Floating Action Button */}
-      <Pressable accessibilityRole="button" accessibilityLabel="Pick and ingest receipt" onPress={onPickAndIngest} style={styles.fab}>
-        <Ionicons name="add" size={28} color="#fff" />
-      </Pressable>
+      {/* Floating Action Buttons (Expandable) */}
+      <FabStack
+        onCamera={captureAndIngest}
+        onLibrary={chooseFromLibrary}
+      />
 
       {/* Undo toast (show most recent pending deletion) */}
       {pending.length > 0 && (() => {
@@ -519,12 +605,15 @@ const styles = StyleSheet.create({
   avatarText: { color: '#0f172a', fontWeight: '700', fontSize: 16 },
   skelLine: { height: 12, backgroundColor: '#cbd5e1', borderRadius: 6, width: '60%' },
   fab: {
-    position: 'absolute', right: 20, bottom: 24,
     backgroundColor: '#4f46e5', height: 56, width: 56, borderRadius: 28,
     alignItems: 'center', justifyContent: 'center',
     shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 6, shadowOffset: { width: 0, height: 3 },
     elevation: 4,
   },
+  fabStackWrap: { position: 'absolute', right: 20, bottom: 28, alignItems: 'center' },
+  fabSmallWrap: { position: 'absolute', right: 0, bottom: 0 },
+  fabSmall: { height: 48, width: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center',
+    shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 5, shadowOffset: { width: 0, height: 3 }, elevation: 3 },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   emptyTitle: { marginTop: 12, fontSize: 18, fontWeight: '700', color: '#334155' },
   emptyText: { marginTop: 6, color: '#64748b' },

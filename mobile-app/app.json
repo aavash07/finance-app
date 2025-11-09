@@ -7,7 +7,16 @@
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "assetBundlePatterns": ["**/*"],
-    "ios": { "supportsTablet": true },
-    "android": {}
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Allow FinanceKit to use the camera to capture receipt photos",
+        "NSPhotoLibraryAddUsageDescription": "Allow FinanceKit to save receipt photos",
+        "NSPhotoLibraryUsageDescription": "Allow FinanceKit to pick receipt photos"
+      }
+    },
+    "android": {
+      "permissions": ["CAMERA", "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE"]
+    }
   }
 }
