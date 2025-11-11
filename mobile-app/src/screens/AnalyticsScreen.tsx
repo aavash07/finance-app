@@ -184,10 +184,18 @@ export default function AnalyticsScreen({ navigation }: any) {
       // byCurrency keeps raw amounts per currency (no conversion)
       currencies[cur] = (currencies[cur] || 0) + totalRaw;
 
-      // Category rollup from items
+      // Category rollup from items (exclude charges like tax/discount/fees/tip)
       if (Array.isArray(d.items)) {
         for (const it of d.items) {
           const desc = safeStr(it?.desc) || safeStr(it?.name);
+          const low = desc.toLowerCase();
+          const isCharge = (
+            low.includes('subtotal') || low.includes('total') || low.includes('tax') || low.includes('vat') || low.includes('gst') ||
+            low.includes('discount') || low.includes('coupon') || low.includes('promo') || low.includes('promotion') || low.includes('savings') || low.includes('rebate') ||
+            low.includes('service charge') || low.includes('gratuity') || low.includes('tip') || low.includes('delivery') || low.includes('surcharge') || low.includes('fee') ||
+            low.includes('change')
+          );
+          if (isCharge) continue;
           const qty = safeNum(it?.qty) || 1;
           const price = safeNum(it?.price);
           const amount = (qty * price) * conv;
@@ -292,6 +300,14 @@ export default function AnalyticsScreen({ navigation }: any) {
       const conv = currencyFilter === 'ALL' ? ((fxToUSD || { USD: 1 })[cur] ?? 1) : 1;
       for (const it of d.items) {
         const desc = safeStr(it?.desc) || safeStr(it?.name);
+        const low = desc.toLowerCase();
+        const isCharge = (
+          low.includes('subtotal') || low.includes('total') || low.includes('tax') || low.includes('vat') || low.includes('gst') ||
+          low.includes('discount') || low.includes('coupon') || low.includes('promo') || low.includes('promotion') || low.includes('savings') || low.includes('rebate') ||
+          low.includes('service charge') || low.includes('gratuity') || low.includes('tip') || low.includes('delivery') || low.includes('surcharge') || low.includes('fee') ||
+          low.includes('change')
+        );
+        if (isCharge) continue;
         const qty = safeNum(it?.qty) || 1;
         const price = safeNum(it?.price);
         const amount = Math.max(0, qty * price) * conv;

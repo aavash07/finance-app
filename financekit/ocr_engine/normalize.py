@@ -18,7 +18,9 @@ _TOTAL_PATTERNS = [
 _TOTAL_EXCLUDE = ("subtotal", "tax", "change", "debit tend")
 
 _NON_ITEM_HINTS = (
-    "subtotal", "tax", "change", "cash", "debit", "credit", "visa", "mastercard",
+    "subtotal", "tax", "vat", "gst", "change", "cash", "debit", "credit", "visa", "mastercard",
+    "discount", "coupon", "promo", "promotion", "savings", "rebate",
+    "service charge", "gratuity", "tip", "delivery", "surcharge", "fee",
     "ref #", "appr code", "terminal #", "auth", "items sold",
     "thank you for shopping", "thank you", "survey", "feedback",
     "save money", "live better", "store receipts", "walmart pay", "signature required",
@@ -125,7 +127,9 @@ def _looks_like_non_item(line: str) -> bool:
     return False
 
 _IGNORE_ITEM_WORDS = (
-    "subtotal", "total", "tax", "change", "debit tend",
+    "subtotal", "total", "tax", "vat", "gst", "change", "debit tend",
+    "discount", "coupon", "promo", "promotion", "savings", "rebate",
+    "service charge", "gratuity", "tip", "delivery", "surcharge", "fee",
     "balance", "amount", "due", "ref #", "network id",
 )
 
@@ -242,6 +246,52 @@ def normalize_text_to_schema(text: str) -> Dict[str, Any]:
 
     items = _itemize(text or "", total_idx)
 
+    # Charges extraction: taxes (VAT/GST/TAX) and discounts (discount/coupon/savings)
+    lines = [ln.strip() for ln in (text or "").splitlines()]
+    TAX_KEYS = ("tax", "vat", "gst")
+    DISC_KEYS = ("discount", "coupon", "promo", "promotion", "savings", "rebate")
+    FEES_KEYS = ("service charge", "delivery", "surcharge", "fee")
+    TIPS_KEYS = ("gratuity", "tip")
+
+    def _sum_by_keys(keys: Tuple[str, ...]) -> float:
+        acc = 0.0
+        for ln in lines:
+            low = ln.lower()
+            if any(k in low for k in keys):
+                tok = _extract_last_price_token(ln)
+                if tok:
+                    val = _parse_total_to_float(tok)
+                    if val < 0:
+                        val = abs(val)
+                    acc += val
+        return acc
+
+    # Prefer explicit subtotal if present; else compute from items
+    def _find_subtotal() -> float | None:
+        for ln in lines:
+            if "subtotal" in ln.lower():
+                tok = _extract_last_price_token(ln)
+                if tok:
+                    return _parse_total_to_float(tok)
+        return None
+
+    items_sum = 0.0
+    for it in items:
+        try:
+            q = float(it.get("qty", 1) or 1)
+            p = float(it.get("price", 0) or 0)
+            items_sum += max(0.0, q * p)
+        except Exception:
+            pass
+
+    tax_total = _sum_by_keys(TAX_KEYS)
+    discount_total = _sum_by_keys(DISC_KEYS)
+    fees_total = _sum_by_keys(FEES_KEYS)
+    tip_total = _sum_by_keys(TIPS_KEYS)
+    subtotal = _find_subtotal()
+    if subtotal is None:
+        subtotal = items_sum
+
     return {
         "merchant": merchant,
         "date": None,  # kept for backward compat; prefer date_str
@@ -249,6 +299,11 @@ def normalize_text_to_schema(text: str) -> Dict[str, Any]:
         "total": total_val,
         "items": items,
         "date_str": date_iso or "",
+        "subtotal": round(subtotal, 2),
+        "tax_total": round(tax_total, 2),
+        "discount_total": round(discount_total, 2),
+        "fees_total": round(fees_total, 2),
+        "tip_total": round(tip_total, 2),
     }
 
 # ----------------------- Helpers: Merchant -------------------------------

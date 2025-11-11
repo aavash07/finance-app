@@ -47,6 +47,16 @@ export default function ReceiptDetailScreen({ route }: Readonly<Props>) {
     }
   };
 
+  const isChargeDesc = (desc: string) => {
+    const low = (desc || '').toLowerCase();
+    return (
+      low.includes('subtotal') || low.includes('total') || low.includes('tax') || low.includes('vat') || low.includes('gst') ||
+      low.includes('discount') || low.includes('coupon') || low.includes('promo') || low.includes('promotion') || low.includes('savings') || low.includes('rebate') ||
+      low.includes('service charge') || low.includes('gratuity') || low.includes('tip') || low.includes('delivery') || low.includes('surcharge') || low.includes('fee') ||
+      low.includes('change')
+    );
+  };
+
   const onDelete = () => {
     Alert.alert('Delete receipt', `Delete receipt #${id}?`, [
       { text: 'Cancel', style: 'cancel' },
@@ -69,10 +79,19 @@ export default function ReceiptDetailScreen({ route }: Readonly<Props>) {
           <Text style={styles.h1}>{str(d.merchant) || 'Receipt'}</Text>
           <Text style={styles.meta}>{str(d.date_str) || str(d.date) || ''}</Text>
           <Text style={styles.total}>Total: {str(d.currency) || 'USD'} {numStr(d.total)}</Text>
+          {d.subtotal || d.tax_total || d.discount_total || d.fees_total || d.tip_total ? (
+            <View style={{ marginTop: 4 }}>
+              {d.subtotal ? <Text style={styles.meta}>Subtotal: {numStr(d.subtotal)}</Text> : null}
+              {d.tax_total ? <Text style={styles.meta}>Tax: {numStr(d.tax_total)}</Text> : null}
+              {d.discount_total ? <Text style={styles.meta}>Discounts: -{numStr(d.discount_total)}</Text> : null}
+              {d.fees_total ? <Text style={styles.meta}>Fees: {numStr(d.fees_total)}</Text> : null}
+              {d.tip_total ? <Text style={styles.meta}>Tip: {numStr(d.tip_total)}</Text> : null}
+            </View>
+          ) : null}
           {Array.isArray(d.items) && d.items.length > 0 ? (
             <View style={styles.items}>
               <Text style={styles.h2}>Items</Text>
-              {d.items.map((it: any, idx: number) => {
+              {(d.items as any[]).filter((it: any) => !isChargeDesc(String(it.desc || it.name || ''))).map((it: any, idx: number) => {
                 const stableKey = String(it.id ?? `${it.desc || it.name || ''}-${it.price}-${it.qty ?? 1}-${idx}`);
                 return (
                 <View key={stableKey} style={styles.itemRow}>

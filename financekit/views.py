@@ -357,6 +357,11 @@ class IngestReceiptView(APIView):
                     date_str=str(date_str)[:32],
                     currency=currency[:8] or "USD",
                     total=total_val,
+                    subtotal=_to_cents(parsed_obj.get("subtotal", 0)),
+                    tax_total=_to_cents(parsed_obj.get("tax_total", 0)),
+                    discount_total=_to_cents(parsed_obj.get("discount_total", 0)),
+                    fees_total=_to_cents(parsed_obj.get("fees_total", 0)),
+                    tip_total=_to_cents(parsed_obj.get("tip_total", 0)),
                     body_nonce=nonce, body_ct=ct, body_tag=tag,
                 )
 
@@ -403,6 +408,11 @@ class IngestReceiptView(APIView):
             "currency": rec.currency,
             "date_str": rec.date_str,
             "total": str(rec.total),
+            "subtotal": str(rec.subtotal),
+            "tax_total": str(rec.tax_total),
+            "discount_total": str(rec.discount_total),
+            "fees_total": str(rec.fees_total),
+            "tip_total": str(rec.tip_total),
             "receipt_id": rec.id,
             "created_at": rec.created_at.isoformat(),
         }

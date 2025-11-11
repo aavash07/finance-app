@@ -26,6 +26,12 @@ class Receipt(models.Model):
     date_str = models.CharField(max_length=32, blank=True, default="")
     currency = models.CharField(max_length=8, blank=True, default="USD")
     total    = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    # Normalized breakdown
+    subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    tax_total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    discount_total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    fees_total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    tip_total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     raw_text = models.TextField(blank=True, default="")
     ocr_json = models.JSONField(default=dict)
 

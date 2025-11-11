@@ -40,7 +40,20 @@ class ReceiptSerializer(serializers.ModelSerializer):
     items = ReceiptItemSerializer(many=True, read_only=True)
     class Meta:
         model = Receipt
-        fields = ("id", "merchant", "date_str", "currency", "total", "items", "created_at")
+        fields = (
+            "id",
+            "merchant",
+            "date_str",
+            "currency",
+            "total",
+            "subtotal",
+            "tax_total",
+            "discount_total",
+            "fees_total",
+            "tip_total",
+            "items",
+            "created_at",
+        )
 
 
 class DevMintTokenSerializer(serializers.Serializer):
