@@ -6,6 +6,7 @@ import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { useAppState } from '../context/AppState';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFxRates } from '../hooks/useFxRates';
 
 type Metric = { label: string; value: string };
 
@@ -141,6 +142,11 @@ export default function AnalyticsScreen({ navigation }: any) {
   useEffect(() => { loadArchivedIds(); }, [loadArchivedIds]);
   // Refresh when the screen gains focus (captures changes from Receipts screen in same session)
   useFocusEffect(useCallback(() => { loadArchivedIds(); }, [loadArchivedIds]));
+
+  // FX rates via shared hook
+  const { toUSD: fxToUSD, ensureRates: ensureFxRates } = useFxRates();
+  useEffect(() => { ensureFxRates(); }, [ensureFxRates]);
+  useFocusEffect(useCallback(() => { ensureFxRates(); }, [ensureFxRates]));
   // Removed collapsible inline filters; using FAB + modal instead
   const [filtersModalOpen, setFiltersModalOpen] = useState(false);
 
@@ -154,20 +160,29 @@ export default function AnalyticsScreen({ navigation }: any) {
     const merchants: Record<string, number> = {};
     const currencies: Record<string, number> = {};
     const categories: Record<string, number> = {};
+    const shouldConvert = currencyFilter === 'ALL';
+    const toUSD = fxToUSD || { USD: 1 };
 
     for (const r of filtered) {
       const d: any = r?.data || r?.derived || {};
-      const total = safeNum(d.total);
+      const totalRaw = safeNum(d.total);
       const cur = safeStr(d.currency) || 'USD';
+      let conv = 1;
+      if (shouldConvert) {
+        const rate = toUSD[cur];
+        if (typeof rate === 'number' && rate > 0) conv = rate;
+      }
+      const total = totalRaw * conv;
       const merchant = safeStr(d.merchant) || 'Unknown';
       const dateStr = safeStr(d.date_str) || safeStr(d.date) || r.updatedAt || '';
-    const dt = new Date(dateStr);
-    const mKey = Number.isNaN(dt.getTime()) ? 'Unknown' : monthKey(dt);
+      const dt = new Date(dateStr);
+      const mKey = Number.isNaN(dt.getTime()) ? 'Unknown' : monthKey(dt);
 
       totals.push(total);
       months[mKey] = (months[mKey] || 0) + total;
       merchants[merchant] = (merchants[merchant] || 0) + total;
-      currencies[cur] = (currencies[cur] || 0) + total;
+      // byCurrency keeps raw amounts per currency (no conversion)
+      currencies[cur] = (currencies[cur] || 0) + totalRaw;
 
       // Category rollup from items
       if (Array.isArray(d.items)) {
@@ -175,7 +190,7 @@ export default function AnalyticsScreen({ navigation }: any) {
           const desc = safeStr(it?.desc) || safeStr(it?.name);
           const qty = safeNum(it?.qty) || 1;
           const price = safeNum(it?.price);
-          const amount = qty * price;
+          const amount = (qty * price) * conv;
           const cat = categorize(desc);
           categories[cat] = (categories[cat] || 0) + Math.max(0, amount);
         }
@@ -219,7 +234,7 @@ export default function AnalyticsScreen({ navigation }: any) {
     const csv = ['date,merchant,currency,total', ...rows].join('\n');
 
     return { kpis, byMonth, byMerchant, byCurrency, byCategory, csv };
-  }, [filtered]);
+  }, [filtered, currencyFilter, fxToUSD]);
 
   
 
@@ -241,10 +256,8 @@ export default function AnalyticsScreen({ navigation }: any) {
 
   const fmtAmount = (n: number) => {
     try {
-      if (currencyFilter !== 'ALL') {
-        return new Intl.NumberFormat(undefined, { style: 'currency', currency: currencyFilter }).format(n);
-      }
-      return new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+      const currency = currencyFilter === 'ALL' ? 'USD' : currencyFilter;
+      return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(n);
     } catch {
       return n.toFixed(2);
     }
@@ -259,7 +272,9 @@ export default function AnalyticsScreen({ navigation }: any) {
     const dateStr = safeStr(d.date_str) || safeStr(d.date) || r.updatedAt || '';
     const dt = new Date(dateStr);
     if (dt >= last30) {
-      const total = safeNum(d.total);
+      const cur = safeStr(d.currency) || 'USD';
+      const conv = currencyFilter === 'ALL' ? ((fxToUSD || { USD: 1 })[cur] ?? 1) : 1;
+      const total = safeNum(d.total) * conv;
       if (!largestReceipt30d || total > largestReceipt30d.total) {
         largestReceipt30d = { date: dateStr, merchant: safeStr(d.merchant), total };
       }
@@ -273,11 +288,13 @@ export default function AnalyticsScreen({ navigation }: any) {
     const dateStr = safeStr(d.date_str) || safeStr(d.date) || r.updatedAt || '';
     const dt = new Date(dateStr);
     if (dt >= thisMonthStart && Array.isArray(d.items)) {
+      const cur = safeStr(d.currency) || 'USD';
+      const conv = currencyFilter === 'ALL' ? ((fxToUSD || { USD: 1 })[cur] ?? 1) : 1;
       for (const it of d.items) {
         const desc = safeStr(it?.desc) || safeStr(it?.name);
         const qty = safeNum(it?.qty) || 1;
         const price = safeNum(it?.price);
-        const amount = Math.max(0, qty * price);
+        const amount = Math.max(0, qty * price) * conv;
         const cat = categorize(desc);
         catTotalsThisMonth[cat] = (catTotalsThisMonth[cat] || 0) + amount;
       }
@@ -631,7 +648,7 @@ function computeInsightsData(filtered: any[], byMonth: { key: string; value: num
   let largestReceipt30d: { date: string; merchant: string; total: number } | null = null;
   for (const r of filtered) {
     const d: any = r?.data || r?.derived || {};
-  const dateStr = safeStr(d.date_str) || safeStr(d.date) || (r as any).updatedAt || '';
+  const dateStr = safeStr(d.date_str) || safeStr(d.date) || r.updatedAt || '';
     const dt = new Date(dateStr);
     if (dt >= last30) {
       const total = safeNum(d.total);
@@ -645,7 +662,7 @@ function computeInsightsData(filtered: any[], byMonth: { key: string; value: num
   const catTotalsThisMonth: Record<string, number> = {};
   for (const r of filtered) {
     const d: any = r?.data || r?.derived || {};
-  const dateStr = safeStr(d.date_str) || safeStr(d.date) || (r as any).updatedAt || '';
+  const dateStr = safeStr(d.date_str) || safeStr(d.date) || r.updatedAt || '';
     const dt = new Date(dateStr);
     if (dt >= thisMonthStart && Array.isArray(d.items)) {
       for (const it of d.items) {

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState, useLayoutEffect } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useLayoutEffect, useCallback } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, Pressable, Animated, Easing, LayoutAnimation, Platform, UIManager, Modal, TouchableWithoutFeedback, SafeAreaView } from 'react-native';
 import { GestureHandlerRootView, Swipeable } from 'react-native-gesture-handler';
 import * as ImagePicker from 'expo-image-picker';
@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 // Haptics (now installed) – static import for type safety
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFxRates } from '../hooks/useFxRates';
 
 // --- Local expandable FAB stack component ---
 function FabStack({ onCamera, onLibrary }: Readonly<{ onCamera: () => Promise<void> | void; onLibrary: () => Promise<void> | void }>) {
@@ -80,7 +81,7 @@ function FabStack({ onCamera, onLibrary }: Readonly<{ onCamera: () => Promise<vo
   );
 }
 
-type Receipt = { id: number; merchant?: string; total?: number; purchased_at?: string };
+type Receipt = { id: number; merchant?: string; total?: number; purchased_at?: string; currency?: string };
 
 // --------- Helpers & Subcomponents (top-level) ---------
 function relativeDate(dateStr?: string) {
@@ -171,7 +172,7 @@ function SkeletonCard({ shimmerBg }: Readonly<{ shimmerBg: any }>) {
   );
 }
 
-function ReceiptItem({ item, merchant, dateDisplay, onPress, onToggleDate }: Readonly<{ item: Receipt; merchant: string; dateDisplay: string; onPress: () => void; onToggleDate: () => void }>) {
+function ReceiptItem({ item, merchant, dateDisplay, onPress, onToggleDate, formatTotal }: Readonly<{ item: Receipt; merchant: string; dateDisplay: string; onPress: () => void; onToggleDate: () => void; formatTotal: (r: Receipt) => string }>) {
   const avatarBg = hashColor(merchant);
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const onPressIn = () => Animated.spring(scaleAnim, { toValue: 0.97, useNativeDriver: true }).start();
@@ -197,7 +198,7 @@ function ReceiptItem({ item, merchant, dateDisplay, onPress, onToggleDate }: Rea
               <Text style={styles.sub}>{dateDisplay}</Text>
             </Pressable>
           </View>
-          <Text style={[styles.amount, { color: amountColor(item.total) }]}>{item.total == null ? '' : `$${item.total}`}</Text>
+          <Text style={[styles.amount, { color: amountColor(item.total) }]}>{item.total == null ? '' : formatTotal(item)}</Text>
         </View>
       </Animated.View>
     </TouchableOpacity>
@@ -265,7 +266,14 @@ export default function ReceiptsScreen() {
       let list: any[] = body.results || body.items || [];
       if (!Array.isArray(list)) list = [];
       // Normalize id to number for consistent archivedId matching
-      const normalized = list.map(rec => ({ ...rec, id: Number(rec.id) })) as Receipt[];
+      const normalized = list.map(rec => ({
+        ...rec,
+        id: Number(rec.id),
+        merchant: rec?.derived?.merchant || rec?.data?.merchant || rec?.merchant,
+        total: rec?.derived?.total || rec?.data?.total || rec?.total,
+        purchased_at: rec?.derived?.date_str || rec?.data?.date || rec?.purchased_at,
+        currency: rec?.derived?.currency || rec?.data?.currency || rec?.currency || 'USD'
+      })) as Receipt[];
       setItems(normalized);
       setFirstLoadComplete(true);
     } catch (e: any) {
@@ -275,7 +283,8 @@ export default function ReceiptsScreen() {
           id: rc.id,
           merchant: rc.derived?.merchant || rc.data?.merchant || 'Receipt',
           total: rc.derived?.total || rc.data?.total || 0,
-          purchased_at: rc.derived?.date_str || ''
+          purchased_at: rc.derived?.date_str || '',
+          currency: rc.derived?.currency || rc.data?.currency || 'USD'
         }));
         setItems(cached as any);
         setFirstLoadComplete(true);
@@ -426,7 +435,8 @@ export default function ReceiptsScreen() {
       if (resp.receipt_id) {
         const merch = resp?.derived?.merchant || resp?.data?.merchant || 'Receipt';
         const total = resp?.derived?.total || resp?.data?.total || '';
-        Alert.alert('Ingested', `#${resp.receipt_id} • ${merch}${total ? ' • $' + total : ''}`);
+        const cur = resp?.derived?.currency || resp?.data?.currency || 'USD';
+        Alert.alert('Ingested', `#${resp.receipt_id} • ${merch}${total ? ' • ' + cur + ' ' + total : ''}`);
         await setReceiptDekWrap(resp.receipt_id, dek_wrap_srv);
         await setReceiptData(resp.receipt_id, resp.data, resp.derived);
         load();
@@ -482,6 +492,18 @@ export default function ReceiptsScreen() {
   }, [loading, items.length, shimmerAnim]);
 
   const shimmerBg = shimmerAnim.interpolate({ inputRange: [0, 0.5, 1], outputRange: ['#e2e8f0', '#f8fafc', '#e2e8f0'] });
+
+  // FX rates via shared hook
+  const { convertToUSD, formatUSD, ensureRates: ensureFxRates } = useFxRates();
+  useEffect(() => { ensureFxRates(); }, [ensureFxRates]);
+  useFocusEffect(useCallback(() => { ensureFxRates(); }, [ensureFxRates]));
+
+  const formatTotalUsd = useCallback((r: Receipt) => {
+    const total = typeof r.total === 'number' ? r.total : Number(r.total);
+    if (!Number.isFinite(total)) return '';
+    const usd = convertToUSD(total, r.currency);
+    return formatUSD(usd);
+  }, [convertToUSD, formatUSD]);
   // Optional prune ONLY after first successful load and when there are items; skip on empty to avoid wiping persisted archive set
   useEffect(() => {
     if (!firstLoadComplete) return;
@@ -545,6 +567,7 @@ export default function ReceiptsScreen() {
                 dateDisplay={dateDisplay}
                 onPress={() => navigation.navigate('ReceiptDetail', { id: item.id })}
                 onToggleDate={() => toggleDateMode(item.id)}
+                formatTotal={formatTotalUsd}
               />
             </Swipeable>
           );
@@ -596,6 +619,7 @@ export default function ReceiptsScreen() {
                             dateDisplay={dateDisplay}
                             onPress={() => {}}
                             onToggleDate={() => toggleDateMode(item.id)}
+                            formatTotal={formatTotalUsd}
                           />
                         </Swipeable>
                       );
