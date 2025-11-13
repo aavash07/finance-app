@@ -86,73 +86,53 @@ type Receipt = { id: number; merchant?: string; total?: number; purchased_at?: s
 // --------- Helpers & Subcomponents (top-level) ---------
 function relativeDate(dateStr?: string) {
   if (!dateStr) return '';
-  const dt = new Date(dateStr);
-  if (Number.isNaN(dt.getTime())) return dateStr;
-  const now = Date.now();
-  const diffMs = now - dt.getTime();
-  const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
-  if (diffDays === 0) {
-    const diffHours = Math.floor(diffMs / (60 * 60 * 1000));
-    if (diffHours === 0) {
-      const diffMin = Math.max(0, Math.floor(diffMs / (60 * 1000)));
-      return diffMin <= 1 ? 'just now' : `${diffMin}m ago`;
-    }
-    return `${diffHours}h ago`;
-  }
-  if (diffDays < 7) return `${diffDays}d ago`;
-  const weeks = Math.floor(diffDays / 7);
-  if (weeks < 5) return `${weeks}w ago`;
-  const months = Math.floor(diffDays / 30);
-  if (months < 12) return `${months}mo ago`;
-  const years = Math.floor(diffDays / 365);
-  return `${years}y ago`;
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHr = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHr / 24);
+  if (diffDay >= 7) return d.toLocaleDateString();
+  if (diffDay >= 1) return `${diffDay}d ago`;
+  if (diffHr >= 1) return `${diffHr}h ago`;
+  if (diffMin >= 1) return `${diffMin}m ago`;
+  return 'Just now';
 }
 
 function formatAbsolute(dateStr?: string) {
   if (!dateStr) return '';
   const d = new Date(dateStr);
   if (Number.isNaN(d.getTime())) return dateStr;
-  try {
-    return new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: '2-digit' }).format(d);
-  } catch {
-    return d.toDateString();
-  }
+  return d.toLocaleDateString();
 }
 
-function hashColor(input: string) {
-  let hash = 0;
-  for (const ch of input) {
-    const cp = ch.codePointAt(0) ?? 0;
-    hash = (hash * 31 + cp) >>> 0;
-  }
-  const r = (hash & 0xff0000) >> 16;
-  const g = (hash & 0x00ff00) >> 8;
-  const b = (hash & 0x0000ff);
-  const lr = Math.floor((r + 255) / 2);
-  const lg = Math.floor((g + 255) / 2);
-  const lb = Math.floor((b + 255) / 2);
-  return `rgb(${lr}, ${lg}, ${lb})`;
+function hashColor(seed: string) {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h << 5) - h + (seed.codePointAt(i) || 0);
+  const colors = ['#4f46e5', '#0ea5e9', '#16a34a', '#f59e0b', '#d946ef', '#0f766e', '#ef4444', '#9333ea'];
+  const idx = Math.abs(h) % colors.length;
+  return colors[idx];
 }
 
-function amountColor(total: number | undefined) {
-  if (total == null) return '#334155';
-  if (total < 25) return '#059669';
-  if (total < 100) return '#f59e0b';
-  return '#dc2626';
+function amountColor(total?: number) {
+  if (typeof total !== 'number') return '#0f172a';
+  return total < 0 ? '#ef4444' : '#0f172a';
 }
-
-const SwipeActionRight = () => (
-  <View style={styles.swipeActionRightWrap}>
-    <View style={styles.swipePillDanger}>
-      <Ionicons name="trash" size={22} color="#fff" />
-    </View>
-  </View>
-);
 
 const SwipeActionLeft = ({ archived }: Readonly<{ archived?: boolean }>) => (
   <View style={styles.swipeActionLeftWrap}>
     <View style={archived ? styles.swipePillNeutral : styles.swipePillPrimary}>
       <Ionicons name={archived ? 'arrow-undo' : 'archive'} size={22} color="#fff" />
+    </View>
+  </View>
+);
+
+const SwipeActionRight = () => (
+  <View style={styles.swipeActionRightWrap}>
+    <View style={styles.swipePillDanger}>
+      <Ionicons name="trash" size={22} color="#fff" />
     </View>
   </View>
 );
@@ -218,6 +198,64 @@ export default function ReceiptsScreen() {
   const [archivedIds, setArchivedIds] = useState<Set<number>>(new Set());
   const [archivedOpen, setArchivedOpen] = useState(false);
   const ARCHIVE_KEY = 'archived_receipt_ids_v1';
+  
+  // Build list from local cache (offline-first)
+  const buildFromCache = useCallback((): Receipt[] => {
+    const cached = Object.values(receipts).map(rc => ({
+      id: rc.id,
+      merchant: rc.derived?.merchant || rc.data?.merchant || 'Receipt',
+      total: rc.derived?.total || rc.data?.total || 0,
+      purchased_at: rc.derived?.date_str || '',
+      currency: rc.derived?.currency || rc.data?.currency || 'USD'
+    }));
+    return cached as any;
+  }, [receipts]);
+
+  // Load receipts; by default use cache; pass true to force server fetch
+  const load = async (forceRemote: boolean = false) => {
+    setLoading(true);
+    try {
+      if (!forceRemote) {
+        const cached = buildFromCache();
+        setItems(cached);
+        setFirstLoadComplete(true);
+        return;
+      }
+      const r = await fetchWithAuth(`${baseUrl.replace(/\/$/, '')}/api/v1/receipts`, { headers: authHeaders });
+      const body = await r.json();
+      if (!r.ok) throw body;
+      let list: any[] = Array.isArray(body) ? body : (body.results || body.items || []);
+      if (!Array.isArray(list)) list = [];
+      const normalized = list.map(rec => ({
+        ...rec,
+        id: Number(rec.id),
+        merchant: rec?.derived?.merchant || rec?.data?.merchant || rec?.merchant,
+        total: rec?.derived?.total || rec?.data?.total || rec?.total,
+        purchased_at: rec?.derived?.date_str || rec?.data?.date || rec?.date_str || rec?.purchased_at,
+        currency: rec?.derived?.currency || rec?.data?.currency || rec?.currency || 'USD'
+      })) as Receipt[];
+      if (normalized.length === 0) {
+        const cached = buildFromCache();
+        setItems(cached);
+      } else {
+        setItems(normalized);
+      }
+      try {
+        const tasks = list.map((rec: any) => (
+          setReceiptData?.(Number(rec.id), rec?.data, rec?.derived)
+        ));
+        await Promise.allSettled(tasks);
+      } catch {}
+      setFirstLoadComplete(true);
+    } catch (e: any) {
+      const cached = buildFromCache();
+      setItems(cached);
+      setFirstLoadComplete(true);
+      console.warn('Receipts load failed, using offline cache:', e?.detail || e?.message || e);
+    } finally {
+      setLoading(false);
+    }
+  };
   // Load archived IDs once on mount
   useEffect(() => {
     (async () => {
@@ -257,45 +295,10 @@ export default function ReceiptsScreen() {
     navigation?.setOptions?.({ headerTitle: 'Receipts', headerRight: HeaderRight });
   }, [navigation, HeaderRight]);
 
-  const load = async () => {
-    setLoading(true);
-    try {
-      const r = await fetchWithAuth(`${baseUrl.replace(/\/$/, '')}/api/v1/receipts`, { headers: authHeaders });
-      const body = await r.json();
-      if (!r.ok) throw body;
-      let list: any[] = body.results || body.items || [];
-      if (!Array.isArray(list)) list = [];
-      // Normalize id to number for consistent archivedId matching
-      const normalized = list.map(rec => ({
-        ...rec,
-        id: Number(rec.id),
-        merchant: rec?.derived?.merchant || rec?.data?.merchant || rec?.merchant,
-        total: rec?.derived?.total || rec?.data?.total || rec?.total,
-        purchased_at: rec?.derived?.date_str || rec?.data?.date || rec?.purchased_at,
-        currency: rec?.derived?.currency || rec?.data?.currency || rec?.currency || 'USD'
-      })) as Receipt[];
-      setItems(normalized);
-      setFirstLoadComplete(true);
-    } catch (e: any) {
-      try {
-        // Offline fallback: use locally cached receipts
-        const cached = Object.values(receipts).map(rc => ({
-          id: rc.id,
-          merchant: rc.derived?.merchant || rc.data?.merchant || 'Receipt',
-          total: rc.derived?.total || rc.data?.total || 0,
-          purchased_at: rc.derived?.date_str || '',
-          currency: rc.derived?.currency || rc.data?.currency || 'USD'
-        }));
-        setItems(cached as any);
-        setFirstLoadComplete(true);
-        console.warn('Receipts load failed, using offline cache:', e?.detail || e?.message || e);
-      } catch (error_) {
-        console.warn('Offline cache load failed:', error_);
-      }
-    } finally { setLoading(false); }
-  };
+  
 
-  useEffect(() => { load(); }, [baseUrl]);
+  // Initial: populate from cache; network only on explicit refresh/CRUD
+  useEffect(() => { load(false); }, [baseUrl, buildFromCache]);
   useEffect(() => { itemsRef.current = items; }, [items]);
   // Enable LayoutAnimation on Android
   useEffect(() => {
@@ -539,41 +542,55 @@ export default function ReceiptsScreen() {
     );
   } else {
     const active = items.filter(x => !archivedIds.has(x.id));
-    content = (
-      <FlatList
-        data={active}
-        refreshing={loading}
-        onRefresh={load}
-        keyExtractor={(x) => String(x.id)}
-        contentContainerStyle={styles.listContent}
-        renderItem={({ item }) => {
-          const showAbs = absoluteDateIds.has(item.id);
-          const dateDisplay = showAbs ? formatAbsolute(item.purchased_at) : relativeDate(item.purchased_at);
-          const merchant = item.merchant || 'Unknown';
-          return (
-            <Swipeable
-              renderLeftActions={() => <SwipeActionLeft archived={false} />}
-              renderRightActions={SwipeActionRight}
-              overshootLeft={false}
-              overshootRight={false}
-              onSwipeableOpen={(direction: any) => {
-                if (direction === 'left') onArchive(item.id);
-                else onDelete(item.id);
-              }}
-            >
-              <ReceiptItem
-                item={item}
-                merchant={merchant}
-                dateDisplay={dateDisplay}
-                onPress={() => navigation.navigate('ReceiptDetail', { id: item.id })}
-                onToggleDate={() => toggleDateMode(item.id)}
-                formatTotal={formatTotalUsd}
-              />
-            </Swipeable>
-          );
-        }}
-      />
-    );
+    if (active.length === 0 && items.length > 0) {
+      content = (
+        <View style={styles.empty}> 
+          <Ionicons name="archive-outline" size={72} color="#94a3b8" />
+          <Text style={styles.emptyTitle}>All receipts are archived</Text>
+          <Text style={styles.emptyText}>Open archived or unarchive to see them here.</Text>
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+            <Pressable onPress={() => setArchivedOpen(true)} style={styles.undoBtn}><Text style={styles.undoBtnText}>View archived</Text></Pressable>
+            <Pressable onPress={() => { const next = new Set<number>(); setArchivedIds(next); persistArchived(next); }} style={[styles.undoBtn, { backgroundColor: '#0ea5e9' }]}><Text style={styles.undoBtnText}>Unarchive all</Text></Pressable>
+          </View>
+        </View>
+      );
+    } else {
+      content = (
+        <FlatList
+          data={active}
+          refreshing={loading}
+          onRefresh={() => load(true)}
+          keyExtractor={(x) => String(x.id)}
+          contentContainerStyle={styles.listContent}
+          renderItem={({ item }) => {
+            const showAbs = absoluteDateIds.has(item.id);
+            const dateDisplay = showAbs ? formatAbsolute(item.purchased_at) : relativeDate(item.purchased_at);
+            const merchant = item.merchant || 'Unknown';
+            return (
+              <Swipeable
+                renderLeftActions={() => <SwipeActionLeft archived={false} />}
+                renderRightActions={SwipeActionRight}
+                overshootLeft={false}
+                overshootRight={false}
+                onSwipeableOpen={(direction: any) => {
+                  if (direction === 'left') onArchive(item.id);
+                  else onDelete(item.id);
+                }}
+              >
+                <ReceiptItem
+                  item={item}
+                  merchant={merchant}
+                  dateDisplay={dateDisplay}
+                  onPress={() => navigation.navigate('ReceiptDetail', { id: item.id })}
+                  onToggleDate={() => toggleDateMode(item.id)}
+                  formatTotal={formatTotalUsd}
+                />
+              </Swipeable>
+            );
+          }}
+        />
+      );
+    }
   }
 
   return (
@@ -672,7 +689,7 @@ const styles = StyleSheet.create({
   amount: { fontWeight: '600' },
   avatarWrap: { marginRight: 12 },
   avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { color: '#0f172a', fontWeight: '700', fontSize: 16 },
+  avatarText: { color: '#ffffff', fontWeight: '700', fontSize: 16 },
   skelLine: { height: 12, backgroundColor: '#cbd5e1', borderRadius: 6, width: '60%' },
   fab: {
     backgroundColor: '#4f46e5', height: 56, width: 56, borderRadius: 28,
