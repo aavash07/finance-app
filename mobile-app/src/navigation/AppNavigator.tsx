@@ -11,7 +11,7 @@ import { useAppState } from '../context/AppState';
 export type RootStackParamList = {
   SignIn: undefined;
   SignUp: undefined;
-  Provisioning: undefined;
+  Provisioning: { fresh?: boolean } | undefined;
   MainTabs: undefined;
   ReceiptDetail: { id: number };
 };
@@ -19,7 +19,7 @@ export type RootStackParamList = {
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export default function AppNavigator() {
-  const { setOnAuthFailure, accessToken, refreshToken, registered } = useAppState() as any;
+  const { setOnAuthFailure, accessToken, refreshToken, registered, hydrated } = useAppState() as any;
   const navRef = React.useRef(createNavigationContainerRef<RootStackParamList>());
   useEffect(() => {
     // When auth fails (e.g., refresh can't renew), reset to SignIn
@@ -33,28 +33,16 @@ export default function AppNavigator() {
     return () => setOnAuthFailure(null);
   }, [setOnAuthFailure]);
   
-  // Bootstrap navigation based on persisted auth state
-  useEffect(() => {
-    const tryRoute = () => {
-      if (!navRef.current?.isReady()) return;
-      const hasAuth = !!(accessToken || refreshToken);
-      if (hasAuth) {
-        const dest = registered ? 'MainTabs' : 'Provisioning';
-        navRef.current.reset({ index: 0, routes: [{ name: dest as any }] });
-      } else {
-        navRef.current.reset({ index: 0, routes: [{ name: 'SignIn' }] });
-      }
-    };
-    // Attempt immediately and again on next tick in case container isn't ready yet
-    tryRoute();
-    const t = setTimeout(tryRoute, 0);
-    return () => clearTimeout(t);
-  }, [accessToken, refreshToken, registered]);
+  // Render nothing until hydration complete to avoid flicker
+  if (!hydrated) return null;
+
+  const hasAuth = !!(accessToken || refreshToken);
+  const initial = hasAuth ? (registered ? 'MainTabs' : 'Provisioning') : 'SignIn';
   return (
     <NavigationContainer ref={navRef as any}>
-  <Stack.Navigator initialRouteName="SignIn">
-    <Stack.Screen name="SignIn" component={SignInScreen} options={{ headerShown: false }} />
-    <Stack.Screen name="SignUp" component={SignUpScreen} options={{ headerShown: false }} />
+      <Stack.Navigator initialRouteName={initial}>
+        <Stack.Screen name="SignIn" component={SignInScreen} options={{ headerShown: false }} />
+        <Stack.Screen name="SignUp" component={SignUpScreen} options={{ headerShown: false }} />
         <Stack.Screen name="Provisioning" component={ProvisioningScreen} options={{ headerShown: false }} />
         <Stack.Screen name="MainTabs" component={MainTabs} options={{ headerShown: false }} />
         <Stack.Screen name="ReceiptDetail" component={ReceiptDetailScreen} options={{ title: 'Receipt' }} />

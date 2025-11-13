@@ -7,7 +7,7 @@ import { useAppState } from '../context/AppState';
 // No direct provisioning here; we navigate to a provisioning screen after auth
 
 export default function SignInScreen() {
-  const { baseUrl, setTokens, setUsername, setPassword } = useAppState() as any;
+  const { baseUrl, setTokens, setUsername, setPassword, save } = useAppState() as any;
   const [user, setUser] = useState('');
   const [pass, setPass] = useState('');
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
@@ -46,10 +46,13 @@ export default function SignInScreen() {
       if (!res.ok) throw new Error(await parseErrorMessage(res));
       const j = await res.json();
       if (!j?.access) throw new Error('Malformed auth response');
+      const uTrim = user.trim();
       await setTokens(j.access, j.refresh);
-      setUsername(user.trim());
+      setUsername(uTrim);
       setPassword(pass);
-      nav.reset({ index: 0, routes: [{ name: 'Provisioning' }] });
+      // Persist credentials so Basic fallback & refresh remain valid after restart
+      await save({ username: uTrim, password: pass });
+      nav.reset({ index: 0, routes: [{ name: 'Provisioning', params: { fresh: true } }] });
     } catch (e: any) {
       Alert.alert('Sign in failed', e?.message || 'Unknown error');
     }

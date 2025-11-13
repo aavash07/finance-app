@@ -27,6 +27,7 @@ type AppState = {
   // Budgets per category (monthly limits)
   budgets: Record<string, number>;
   setBudget: (category: string, amount: number | null) => Promise<void>;
+  hydrated: boolean; // initial secure store / async storage load complete
 };
 
 const Ctx = createContext<AppState | undefined>(undefined);
@@ -58,8 +59,10 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
   const [receipts, setReceipts] = useState<Record<string, { id: number; data?: any; derived?: any; updatedAt: string }>>({});
   const [budgets, setBudgets] = useState<Record<string, number>>({});
   const [onAuthFailure, setOnAuthFailure] = useState<(() => void) | null>(null);
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       // Load secrets and small values from SecureStore
       const [sPriv, sPub, sDev, sBase, sUser, sPass, sPem, sReg, sAccess, sRefresh] = await Promise.all([
@@ -84,6 +87,16 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
       if (sReg) setRegistered(sReg === '1' || sReg.toLowerCase() === 'true');
       if (sAccess) setAccessToken(sAccess);
       if (sRefresh) setRefreshToken(sRefresh);
+
+      // Fallback: if secure store didn't return tokens (e.g. after reinstall), try AsyncStorage
+      if (!sAccess || !sRefresh) {
+        const [aAccess, aRefresh] = await Promise.all([
+          AsyncStorage.getItem('accessToken_fallback'),
+          AsyncStorage.getItem('refreshToken_fallback')
+        ]);
+        if (!sAccess && aAccess) setAccessToken(aAccess);
+        if (!sRefresh && aRefresh) setRefreshToken(aRefresh);
+      }
 
       // Migration: move large JSON items from SecureStore -> AsyncStorage (one-time)
       const migrated = await AsyncStorage.getItem('async_migrated_v1');
@@ -112,7 +125,42 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
       if (aWraps) { try { setDekWraps(JSON.parse(aWraps)); } catch {} }
       if (aReceipts) { try { setReceipts(JSON.parse(aReceipts)); } catch {} }
       if (aBudgets) { try { setBudgets(JSON.parse(aBudgets) || {}); } catch {} }
+      // Proactive access token refresh if expired and refresh token present
+      const needsRefresh = (() => {
+        if (!sAccess) return false;
+        try {
+          const payloadB64 = sAccess.split('.')[1];
+          if (!payloadB64) return false;
+          const norm = payloadB64.replace(/-/g,'+').replace(/_/g,'/');
+          const pad = norm + '==='.slice((norm.length % 4));
+          const bytes = base64js.toByteArray(pad);
+          let json = '';
+          for (let i=0;i<bytes.length;i++) json += String.fromCharCode(bytes[i]);
+          const parsed = JSON.parse(json);
+          const exp = parsed?.exp;
+          if (!exp || typeof exp !== 'number') return false;
+          const nowSec = Math.floor(Date.now()/1000);
+          // Refresh if already expired or will expire within 60s
+          return exp <= nowSec + 60;
+        } catch { return false; }
+      })();
+      if (needsRefresh && sRefresh) {
+        try {
+          const r = await fetch(`${(sBase||baseUrl).replace(/\/$/,'')}/api/v1/auth/token/refresh`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh: sRefresh })
+          });
+          if (r.ok) {
+            const data = await r.json();
+            if (data?.access) await setTokens(data.access, data.refresh || sRefresh);
+          } else {
+            // Invalidate tokens if refresh fails
+            await setTokens(null, null);
+          }
+        } catch { /* ignore network errors; fallback to existing token */ }
+      }
+      if (!cancelled) setHydrated(true);
     })();
+    return () => { cancelled = true; };
   }, []);
 
   const authHeaders = useMemo(() => {
@@ -173,6 +221,8 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
     await Promise.all([
       store.set('accessToken', access || ''),
       store.set('refreshToken', refresh || ''),
+      AsyncStorage.setItem('accessToken_fallback', access || ''),
+      AsyncStorage.setItem('refreshToken_fallback', refresh || ''),
     ]);
   };
 
@@ -237,7 +287,7 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
     });
   };
 
-  const value = useMemo<AppState>(() => ({ baseUrl, setBaseUrl, username, setUsername, password, setPassword, deviceId, setDeviceId, pubB64, setPubB64, privB64, setPrivB64, pem, setPem, registered, setRegistered: markRegistered, authHeaders, fetchWithAuth, logout, setOnAuthFailure, save, dekWraps, setReceiptDekWrap, receipts, setReceiptData, removeReceipt, budgets, setBudget, accessToken, refreshToken, setTokens }), [baseUrl, username, password, deviceId, pubB64, privB64, pem, registered, authHeaders, fetchWithAuth, logout, setOnAuthFailure, dekWraps, receipts, budgets, accessToken, refreshToken]);
+  const value = useMemo<AppState>(() => ({ baseUrl, setBaseUrl, username, setUsername, password, setPassword, deviceId, setDeviceId, pubB64, setPubB64, privB64, setPrivB64, pem, setPem, registered, setRegistered: markRegistered, authHeaders, fetchWithAuth, logout, setOnAuthFailure, save, dekWraps, setReceiptDekWrap, receipts, setReceiptData, removeReceipt, budgets, setBudget, accessToken, refreshToken, setTokens, hydrated }), [baseUrl, username, password, deviceId, pubB64, privB64, pem, registered, authHeaders, fetchWithAuth, logout, setOnAuthFailure, dekWraps, receipts, budgets, accessToken, refreshToken, hydrated]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
