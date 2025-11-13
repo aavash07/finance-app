@@ -19,7 +19,7 @@ export type RootStackParamList = {
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export default function AppNavigator() {
-  const { setOnAuthFailure } = useAppState();
+  const { setOnAuthFailure, accessToken, refreshToken, registered } = useAppState() as any;
   const navRef = React.useRef(createNavigationContainerRef<RootStackParamList>());
   useEffect(() => {
     // When auth fails (e.g., refresh can't renew), reset to SignIn
@@ -32,6 +32,24 @@ export default function AppNavigator() {
     });
     return () => setOnAuthFailure(null);
   }, [setOnAuthFailure]);
+  
+  // Bootstrap navigation based on persisted auth state
+  useEffect(() => {
+    const tryRoute = () => {
+      if (!navRef.current?.isReady()) return;
+      const hasAuth = !!(accessToken || refreshToken);
+      if (hasAuth) {
+        const dest = registered ? 'MainTabs' : 'Provisioning';
+        navRef.current.reset({ index: 0, routes: [{ name: dest as any }] });
+      } else {
+        navRef.current.reset({ index: 0, routes: [{ name: 'SignIn' }] });
+      }
+    };
+    // Attempt immediately and again on next tick in case container isn't ready yet
+    tryRoute();
+    const t = setTimeout(tryRoute, 0);
+    return () => clearTimeout(t);
+  }, [accessToken, refreshToken, registered]);
   return (
     <NavigationContainer ref={navRef as any}>
   <Stack.Navigator initialRouteName="SignIn">
