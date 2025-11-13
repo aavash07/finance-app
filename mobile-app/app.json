@@ -4,11 +4,15 @@
     "slug": "financekit-mobile",
     "version": "1.0.0",
     "sdkVersion": "51.0.0",
+    "splash": {
+      "backgroundColor": "#ffffff"
+    },
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "com.aavash07.financekit",
       "infoPlist": {
         "NSCameraUsageDescription": "Allow FinanceKit to use the camera to capture receipt photos",
         "NSPhotoLibraryAddUsageDescription": "Allow FinanceKit to save receipt photos",
@@ -16,6 +20,7 @@
       }
     },
     "android": {
+      "package": "com.aavash07.financekit",
       "permissions": ["CAMERA", "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE"]
     }
   }
