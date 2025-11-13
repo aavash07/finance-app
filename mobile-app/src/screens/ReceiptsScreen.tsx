@@ -217,7 +217,9 @@ export default function ReceiptsScreen() {
     try {
       if (!forceRemote) {
         const cached = buildFromCache();
-        setItems(cached);
+        const exclude = new Set(pendingRef.current.map(p => p.id));
+        const filtered = exclude.size ? cached.filter(r => !exclude.has(r.id)) : cached;
+        setItems(filtered);
         setFirstLoadComplete(true);
         return;
       }
@@ -234,11 +236,14 @@ export default function ReceiptsScreen() {
         purchased_at: rec?.derived?.date_str || rec?.data?.date || rec?.date_str || rec?.purchased_at,
         currency: rec?.derived?.currency || rec?.data?.currency || rec?.currency || 'USD'
       })) as Receipt[];
+      const exclude = new Set(pendingRef.current.map(p => p.id));
       if (normalized.length === 0) {
         const cached = buildFromCache();
-        setItems(cached);
+        const filtered = exclude.size ? cached.filter(r => !exclude.has(r.id)) : cached;
+        setItems(filtered);
       } else {
-        setItems(normalized);
+        const filtered = exclude.size ? normalized.filter(r => !exclude.has(r.id)) : normalized;
+        setItems(filtered);
       }
       try {
         const tasks = list.map((rec: any) => (
@@ -321,6 +326,10 @@ export default function ReceiptsScreen() {
   const scheduleDeletion = (id: number) => {
     // Work on a local snapshot to avoid race conditions between multiple setState calls
     let snapshot = itemsRef.current;
+    if (!snapshot || snapshot.length === 0) {
+      // If list not yet built (e.g., navigated from detail immediately), base on cache
+      snapshot = buildFromCache();
+    }
     let target = snapshot.find(x => x.id === id);
     if (!target) {
       const rLocal = receipts[String(id)];
@@ -331,9 +340,9 @@ export default function ReceiptsScreen() {
         total: rLocal.derived?.total || rLocal.data?.total || 0,
         purchased_at: rLocal.derived?.date_str || ''
       };
-      // Treat as if part of the current list for optimistic removal
-      snapshot = [...snapshot, target];
+      // Ensure we consider all other items in snapshot; target may not be present
     }
+    const originalIndex = Math.max(0, snapshot.findIndex(x => x.id === id));
     // Optimistically remove target (ensure single instance removed)
     const afterRemoval = snapshot.filter(x => x.id !== id);
     try { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); } catch (e) { console.warn('LayoutAnimation unavailable:', (e as Error).message); }
@@ -355,14 +364,15 @@ export default function ReceiptsScreen() {
         Alert.alert('Error', e?.message || 'Failed to delete (restoring)');
       }
       if (!ok) {
-        // Restore item
-        const next = [...itemsRef.current, target];
-        next.sort((a,b) => b.id - a.id);
+        // Restore item at original position to preserve ordering
+        const filtered = itemsRef.current.filter(x => x.id !== id);
+        const idx = Math.min(originalIndex >= 0 ? originalIndex : filtered.length, filtered.length);
+        const next = [...filtered.slice(0, idx), target, ...filtered.slice(idx)];
         setItems(next);
       }
       setPending(pendingRef.current.filter(x => x.id !== id));
     }, UNDO_MS);
-  setPending([...pendingRef.current.filter(p => p.id !== id), { id, merchant: target.merchant || 'Receipt', timer, item: target }]);
+  setPending([...pendingRef.current.filter(p => p.id !== id), { id, merchant: target.merchant || 'Receipt', timer, item: target, index: originalIndex } as any]);
   // If this was archived, drop it from archived set so state stays consistent
     setArchivedIds(prev => {
       if (!prev.has(id)) return prev;
@@ -407,13 +417,14 @@ export default function ReceiptsScreen() {
   );
 
   const undoDelete = (id: number) => {
-    const entry = pendingRef.current.find(x => x.id === id);
+    const entry: any = pendingRef.current.find(x => x.id === id);
     if (entry) clearTimeout(entry.timer);
     setPending(pendingRef.current.filter(x => x.id !== id));
     if (entry?.item) {
-      // Deduplicate before restoring
+      // Deduplicate before restoring and insert at original index to preserve order
       const filtered = itemsRef.current.filter(x => x.id !== id);
-      const next = [...filtered, entry.item].sort((a, b) => b.id - a.id);
+      const idx = Math.min(typeof entry.index === 'number' ? entry.index : filtered.length, filtered.length);
+      const next = [...filtered.slice(0, idx), entry.item, ...filtered.slice(idx)];
       setItems(next);
     }
     progressAnim.stopAnimation();
