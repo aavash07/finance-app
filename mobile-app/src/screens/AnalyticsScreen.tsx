@@ -271,6 +271,16 @@ export default function AnalyticsScreen({ navigation }: any) {
     }
   };
 
+  // Format explicitly in a given currency (used by By Currency section)
+  const fmtAmountIn = (currencyCode: string, n: number) => {
+    try {
+      const cur = currencyCode || (currencyFilter === 'ALL' ? 'USD' : currencyFilter);
+      return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur }).format(n);
+    } catch {
+      return n.toFixed(2);
+    }
+  };
+
   // Insights
   const now = new Date();
   const last30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -368,7 +378,7 @@ export default function AnalyticsScreen({ navigation }: any) {
 
       <TopMerchantsSection byMerchant={byMerchant} maxMerchant={maxMerchant} fmtAmount={fmtAmount} />
 
-      <ByCurrencySection byCurrency={byCurrency} fmtAmount={fmtAmount} />
+      <ByCurrencySection byCurrency={byCurrency} fmtAmountIn={fmtAmountIn} />
 
       <ByCategorySection byCategory={byCategory} maxCategory={maxCategory} budgets={budgets} fmtAmount={fmtAmount} />
 
@@ -880,13 +890,13 @@ function TopMerchantsSection({ byMerchant, maxMerchant, fmtAmount }: Readonly<{ 
   );
 }
 
-function ByCurrencySection({ byCurrency, fmtAmount }: Readonly<{ byCurrency: ByKV; fmtAmount: (n:number)=>string }>) {
+function ByCurrencySection({ byCurrency, fmtAmountIn }: Readonly<{ byCurrency: ByKV; fmtAmountIn: (cur:string, n:number)=>string }>) {
   return (
     <Section title="By Currency">
       {byCurrency.length === 0 ? <Text style={styles.empty}>No data yet</Text> : byCurrency.map(c => (
         <View key={c.key} style={styles.rowBare}>
           <Text style={styles.rowLabel}>{c.key}</Text>
-          <Text style={styles.rowVal}>{fmtAmount(c.value)}</Text>
+          <Text style={styles.rowVal}>{fmtAmountIn(c.key, c.value)}</Text>
         </View>
       ))}
     </Section>
