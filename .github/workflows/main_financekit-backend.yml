@@ -79,4 +79,40 @@ jobs:
         with:
           app-name: 'financekit-backend'
           slot-name: 'Production'
+      - name: Run Django migrations (post-deploy)
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_NAME="financekit-backend"
+          RG_NAME=$(az webapp show --name "$APP_NAME" --query resourceGroup -o tsv)
+          echo "Resolved resource group: $RG_NAME"
+          az webapp run-command invoke \
+            --resource-group "$RG_NAME" \
+            --name "$APP_NAME" \
+            --command "bash -lc 'set -e; APP_PATH=$(find /tmp -maxdepth 3 -type f -name manage.py -printf %h -quit); echo app=\"$APP_PATH\"; cd \"$APP_PATH\"; if [ -d antenv ]; then . antenv/bin/activate; fi; python manage.py migrate --noinput'"
+
+      - name: Ensure server RSA keys (idempotent)
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_NAME="financekit-backend"
+          RG_NAME=$(az webapp show --name "$APP_NAME" --query resourceGroup -o tsv)
+          az webapp run-command invoke \
+            --resource-group "$RG_NAME" \
+            --name "$APP_NAME" \
+            --command "bash -lc 'set -e; \
+              PRIV_PATH=\"${SERVER_RSA_PRIV_PATH:-/home/site/secrets/server_rsa_priv.pem}\"; \
+              PUB_PATH=\"${SERVER_RSA_PUB_PATH:-/home/site/secrets/server_rsa_pub.pem}\"; \
+              mkdir -p \"$(dirname \"$PRIV_PATH\")\"; \
+              if [ ! -f \"$PRIV_PATH\" ]; then \
+                echo Generating RSA keypair at \"$PRIV_PATH\" and \"$PUB_PATH\"; \
+                openssl genrsa -out \"$PRIV_PATH\" 2048; \
+                chmod 600 \"$PRIV_PATH\"; \
+                openssl rsa -in \"$PRIV_PATH\" -pubout -out \"$PUB_PATH\"; \
+              fi; \
+              ls -la \"$(dirname \"$PRIV_PATH\")\"'"
+      - name: Warm up and health check
+        run: |
+          echo "Warming up financekit-backend...";
+          curl -sSf https://financekit-backend.azurewebsites.net/health || echo "Health check failed (non-blocking)";
           
