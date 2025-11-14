@@ -78,22 +78,22 @@ jobs:
 
       - name: 'Deploy to Azure Web App'
         id: deploy-to-webapp
+        uses: azure/webapps-deploy@v3
+        continue-on-error: true
+        with:
+          app-name: 'financekit-backend'
+          slot-name: 'Production'
+
+      - name: Retry deploy via az CLI if action failed
+        if: failure()
+        shell: bash
         run: |
           set -euo pipefail
-          echo "Starting deploy with retry logic";
-          for attempt in 1 2 3; do
-            echo "Attempt $attempt";
-            if npx --yes azure-webapps-deploy \
-              --app-name financekit-backend \
-              --slot-name Production \
-              --package .; then
-              echo "Deployment succeeded on attempt $attempt"; break;
-            else
-              rc=$?; echo "Deployment failed (rc=$rc)";
-              if [ $attempt -eq 3 ]; then echo "Failing after 3 attempts"; exit $rc; fi;
-              echo "Waiting then retrying..."; sleep 15;
-            fi;
-          done
+          APP_NAME="financekit-backend"
+          RG_NAME="${AZURE_RESOURCE_GROUP}"; echo "Retrying deploy via az CLI for $APP_NAME in $RG_NAME"
+          # Create a zip package for OneDeploy
+          zip -qr package.zip .
+          az webapp deploy --resource-group "$RG_NAME" --name "$APP_NAME" --src-path package.zip --type zip
       - name: Run Django migrations (post-deploy)
         shell: bash
         run: |
