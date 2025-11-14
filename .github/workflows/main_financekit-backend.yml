@@ -59,6 +59,8 @@ jobs:
     permissions:
       id-token: write #This is required for requesting the JWT
       contents: read #This is required for actions/checkout
+    env:
+      AZURE_RESOURCE_GROUP: azure-free # <-- Set your resource group name here or override via repository/organization variable
 
     steps:
       - name: Download artifact from build job
@@ -84,8 +86,7 @@ jobs:
         run: |
           set -euo pipefail
           APP_NAME="financekit-backend"
-          RG_NAME=$(az webapp show --name "$APP_NAME" --query resourceGroup -o tsv)
-          echo "Resolved resource group: $RG_NAME"
+          RG_NAME="${AZURE_RESOURCE_GROUP}"; echo "Using resource group: $RG_NAME"
           az webapp run-command invoke \
             --resource-group "$RG_NAME" \
             --name "$APP_NAME" \
@@ -96,7 +97,7 @@ jobs:
         run: |
           set -euo pipefail
           APP_NAME="financekit-backend"
-          RG_NAME=$(az webapp show --name "$APP_NAME" --query resourceGroup -o tsv)
+          RG_NAME="${AZURE_RESOURCE_GROUP}"; echo "Using resource group: $RG_NAME"
           az webapp run-command invoke \
             --resource-group "$RG_NAME" \
             --name "$APP_NAME" \
