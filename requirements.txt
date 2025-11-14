@@ -21,3 +21,5 @@ sqlparse==0.5.3
 urllib3==2.5.0
 wheel==0.45.1
 djangorestframework-simplejwt
+whitenoise==6.7.0
+gunicorn==23.0.0

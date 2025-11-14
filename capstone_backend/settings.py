@@ -1,12 +1,24 @@
 from pathlib import Path
 import os
 from dotenv import load_dotenv
-load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Multi-environment support: load env files by precedence
+# DJANGO_ENV (or ENV) selects the environment name, e.g. "development", "production".
+# Precedence: .env.<env>.local > .env.<env> > .env.local > .env
+ENV_NAME = os.getenv("DJANGO_ENV", os.getenv("ENV", "development")).lower()
+IS_PROD = ENV_NAME in ("prod", "production")
+for name in (f".env.{ENV_NAME}.local", f".env.{ENV_NAME}", ".env.local", ".env"):
+    try:
+        load_dotenv(BASE_DIR / name, override=False)
+    except Exception:
+        # Non-fatal if file is absent or unreadable
+        pass
+
 SECRET_KEY = os.getenv("SECRET_KEY", "dev")
-DEBUG = bool(int(os.getenv("DEBUG", "1")))
+DEFAULT_DEBUG = "0" if IS_PROD else "1"
+DEBUG = bool(int(os.getenv("DEBUG", DEFAULT_DEBUG)))
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "*").split(",")
 
 INSTALLED_APPS = [
@@ -18,6 +30,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -43,13 +56,16 @@ TEMPLATES = [{
 
 WSGI_APPLICATION = "capstone_backend.wsgi.application"
 
-# Database config: Postgres by default; allow opting into SQLite for local/dev/tests
-DB_ENGINE = os.getenv("DB_ENGINE", "postgresql").lower()
+# Database config:
+# - In production: default to Postgres
+# - In development: default to SQLite (easy local setup)
+DB_ENGINE = os.getenv("DB_ENGINE", "postgresql" if IS_PROD else "sqlite").lower()
 if DB_ENGINE == "sqlite":
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
-            "NAME": os.path.join(BASE_DIR, "db.sqlite3"),
+            # Default to local file for dev; allow override to a writable path on Azure (e.g. /home/site/db.sqlite3)
+            "NAME": os.getenv("SQLITE_PATH", os.path.join(BASE_DIR, "db.sqlite3")),
         }
     }
 else:
@@ -61,6 +77,8 @@ else:
             "PASSWORD": os.getenv("DB_PASSWORD","capstone"),
             "HOST": os.getenv("DB_HOST","localhost"),
             "PORT": os.getenv("DB_PORT","5432"),
+            # SSL defaults: require in production, disable in dev; can be overridden via DB_SSLMODE
+            "OPTIONS": {"sslmode": os.getenv("DB_SSLMODE", "require" if IS_PROD else "disable")},
         }
     }
 
@@ -70,7 +88,20 @@ TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
 
-STATIC_URL = "static/"
+STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+
+# Use WhiteNoise for static files in production builds
+STORAGES = {
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+}
+
+# Trust proxy headers for HTTPS redirects behind Azure App Service
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+# Optional: CSRF trusted origins (comma-separated URLs)
+CSRF_TRUSTED_ORIGINS = [o for o in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if o]
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
