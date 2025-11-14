@@ -43,7 +43,8 @@ def redis_client():
     return redislib.from_url(url) if url else None
 
 class ServerPubKeyView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    # Public access: clients can fetch server RSA public key before auth
+    permission_classes = [AllowAny]
 
     def get(self, request):
         return Response({
