@@ -56,6 +56,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: build
+    concurrency: financekit-backend-deploy
     permissions:
       id-token: write #This is required for requesting the JWT
       contents: read #This is required for actions/checkout
@@ -76,11 +77,23 @@ jobs:
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_09AD2B9AA0474E588602C57D3F069CB2 }}
 
       - name: 'Deploy to Azure Web App'
-        uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
-        with:
-          app-name: 'financekit-backend'
-          slot-name: 'Production'
+        run: |
+          set -euo pipefail
+          echo "Starting deploy with retry logic";
+          for attempt in 1 2 3; do
+            echo "Attempt $attempt";
+            if npx --yes azure-webapps-deploy \
+              --app-name financekit-backend \
+              --slot-name Production \
+              --package .; then
+              echo "Deployment succeeded on attempt $attempt"; break;
+            else
+              rc=$?; echo "Deployment failed (rc=$rc)";
+              if [ $attempt -eq 3 ]; then echo "Failing after 3 attempts"; exit $rc; fi;
+              echo "Waiting then retrying..."; sleep 15;
+            fi;
+          done
       - name: Run Django migrations (post-deploy)
         shell: bash
         run: |
