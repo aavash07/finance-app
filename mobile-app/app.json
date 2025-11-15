@@ -12,7 +12,9 @@
     },
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.aavash07.financekit",
@@ -24,7 +26,11 @@
     },
     "android": {
       "package": "com.aavash07.financekit",
-      "permissions": ["CAMERA", "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE"],
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ],
       "splash": {
         "image": "./assets/splash.png",
         "backgroundColor": "#0f172a",
@@ -34,6 +40,12 @@
         "foregroundImage": "./assets/adaptive-icon-foreground.png",
         "backgroundColor": "#0f172a"
       }
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "829b257d-bc80-4b1f-be6e-38ab24437e5d"
+      }
+    },
+    "owner": "aavashch"
   }
 }
