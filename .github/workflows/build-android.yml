@@ -26,21 +26,51 @@ jobs:
       - name: Build & pack rn-sdk
         working-directory: rn-sdk
         run: |
-          npm ci
-          TARFILE=$(npm pack --silent | tail -n1 | tr -d '\r')
-          echo "Packed tarball: $TARFILE"
-          if [ ! -f "$TARFILE" ]; then echo "Tarball not found after pack"; exit 1; fi
-          ln -sf "$TARFILE" financekit-rn-sdk-0.1.0.tgz
-          ls -l
-          echo "RN_SDK_TARBALL=$TARFILE" >> $GITHUB_ENV
+          set -euo pipefail
 
-      - name: Install dependencies (mobile-app)
-        run: |
-          echo "Listing rn-sdk directory before install";
-          ls -l ../rn-sdk || true
-          if [ ! -f ../rn-sdk/financekit-rn-sdk-0.1.0.tgz ]; then echo "Missing expected tarball ../rn-sdk/financekit-rn-sdk-0.1.0.tgz"; exit 1; fi
-          npm cache clean --force
+          # Install and build the rn-sdk package
           npm ci
+          npm run build
+
+          # Pack and capture the produced tarball filename reliably
+          tgz=$(npm pack --silent)
+          echo "Packed: $tgz"
+
+          # Debug listing
+          echo "rn-sdk directory listing:"
+          ls -la
+
+          # Copy the tgz into mobile-app so the subsequent npm ci in mobile-app can use it
+          cp "$tgz" ../mobile-app/ || { echo "Failed to copy $tgz to ../mobile-app/"; ls -la .. || true; exit 1; }
+          echo "Copied $tgz to ../mobile-app/"
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+
+          # Ensure official npm registry
+          npm config set registry https://registry.npmjs.org/
+
+          # Remove possible corrupted cache and verify
+          rm -rf ~/.npm/_cacache
+          npm cache clean --force || true
+          npm cache verify || true
+
+          # Retry npm ci up to 3 times to handle transient errors
+          n=0
+          until [ "$n" -ge 3 ]
+          do
+            npm ci && break
+            n=$((n+1))
+            echo "npm ci failed, retry $n/3..."
+            sleep $((n*5))
+          done
+          if [ "$n" -ge 3 ]; then
+            echo "npm ci failed after 3 attempts" >&2
+            exit 1
+          fi
+
+          # Install eas-cli globally as before
           npm i -g eas-cli@latest
 
       - name: Expo login via token
