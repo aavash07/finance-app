@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 // Haptics (now installed) – static import for type safety
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import NetInfo from '@react-native-community/netinfo';
 import { useFxRates } from '../hooks/useFxRates';
 
 // --- Local expandable FAB stack component ---
@@ -188,16 +189,18 @@ function ReceiptItem({ item, merchant, dateDisplay, onPress, onToggleDate, forma
 export default function ReceiptsScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
-  const { baseUrl, authHeaders, deviceId, pem, privB64, setReceiptDekWrap, receipts, setReceiptData, fetchWithAuth, removeReceipt } = useAppState();
+  const { baseUrl, authHeaders, deviceId, pem, privB64, setReceiptDekWrap, receipts, setReceiptData, fetchWithAuth, removeReceipt, username, queueDelete, dequeueDelete, outboxDeletes } = useAppState();
   const api = useMemo(() => new FinanceKitClient(baseUrl, fetchWithAuth), [baseUrl, fetchWithAuth]);
   const [items, setItems] = useState<Receipt[]>([]);
   const itemsRef = useRef(items);
   const [loading, setLoading] = useState(false);
+  const [isOnline, setIsOnline] = useState<boolean | null>(null);
+  const isOnlineRef = useRef<boolean | null>(null);
   const [firstLoadComplete, setFirstLoadComplete] = useState(false);
   // Archived receipts (persisted UI state)
   const [archivedIds, setArchivedIds] = useState<Set<number>>(new Set());
   const [archivedOpen, setArchivedOpen] = useState(false);
-  const ARCHIVE_KEY = 'archived_receipt_ids_v1';
+  const ARCHIVE_KEY = `archived_receipt_ids_v1:${username}`;
   
   // Build list from local cache (offline-first)
   const buildFromCache = useCallback((): Receipt[] => {
@@ -211,12 +214,19 @@ export default function ReceiptsScreen() {
     return cached as any;
   }, [receipts]);
 
+  // Helper: filter out ids queued for deletion (outbox) so they stay hidden until server confirms
+  const filterQueuedDeletes = useCallback((list: Receipt[]): Receipt[] => {
+    if (!outboxDeletes || outboxDeletes.length === 0) return list;
+    const exclude = new Set(outboxDeletes);
+    return list.filter(r => !exclude.has(r.id));
+  }, [outboxDeletes]);
+
   // Load receipts; by default use cache; pass true to force server fetch
-  const load = async (forceRemote: boolean = false) => {
-    setLoading(true);
+  const load = async (forceRemote: boolean = false, opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
     try {
       if (!forceRemote) {
-        const cached = buildFromCache();
+        const cached = filterQueuedDeletes(buildFromCache());
         const exclude = new Set(pendingRef.current.map(p => p.id));
         const filtered = exclude.size ? cached.filter(r => !exclude.has(r.id)) : cached;
         setItems(filtered);
@@ -238,27 +248,39 @@ export default function ReceiptsScreen() {
       })) as Receipt[];
       const exclude = new Set(pendingRef.current.map(p => p.id));
       if (normalized.length === 0) {
-        const cached = buildFromCache();
+        const cached = filterQueuedDeletes(buildFromCache());
         const filtered = exclude.size ? cached.filter(r => !exclude.has(r.id)) : cached;
         setItems(filtered);
       } else {
-        const filtered = exclude.size ? normalized.filter(r => !exclude.has(r.id)) : normalized;
-        setItems(filtered);
+        // Merge server-first list with any existing items (e.g., recently injected)
+        const map = new Map<number, Receipt>();
+        for (const r of normalized) { map.set(Number(r.id), r); }
+        for (const r of itemsRef.current || []) { if (!map.has(Number(r.id))) map.set(Number(r.id), r); }
+        let merged = Array.from(map.values());
+        merged = filterQueuedDeletes(merged);
+        merged = exclude.size ? merged.filter(r => !exclude.has(r.id)) : merged;
+        setItems(merged);
       }
       try {
-        const tasks = list.map((rec: any) => (
-          setReceiptData?.(Number(rec.id), rec?.data, rec?.derived)
-        ));
-        await Promise.allSettled(tasks);
+        // Only persist receipt data when server response actually includes plaintext/derived fields
+        const tasks: Promise<any>[] = [];
+        for (const rec of list) {
+          if (rec && (rec.data || rec.derived)) {
+            tasks.push(setReceiptData?.(Number(rec.id), rec.data, rec.derived));
+          }
+        }
+        if (tasks.length) {
+          await Promise.allSettled(tasks);
+        }
       } catch {}
       setFirstLoadComplete(true);
     } catch (e: any) {
-      const cached = buildFromCache();
+      const cached = filterQueuedDeletes(buildFromCache());
       setItems(cached);
       setFirstLoadComplete(true);
       console.warn('Receipts load failed, using offline cache:', e?.detail || e?.message || e);
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
   };
   // Load archived IDs once on mount
@@ -275,26 +297,47 @@ export default function ReceiptsScreen() {
         }
       } catch {/* ignore */}
     })();
-  }, []);
+  }, [ARCHIVE_KEY]);
   const persistArchived = React.useCallback(async (ids: Set<number>) => {
     try { await AsyncStorage.setItem(ARCHIVE_KEY, JSON.stringify(Array.from(ids))); } catch {/* ignore */}
   }, []);
 
   // Header chip similar to Analytics headerRight
   const HeaderRight = React.useCallback(() => {
-    if (archivedIds.size === 0) return null;
     return (
-      <Pressable
-        onPress={() => setArchivedOpen(true)}
-        style={[styles.archivedChip, { marginBottom: 0 }]}
-        accessibilityRole="button"
-        accessibilityLabel={`Open archived receipts (${archivedIds.size})`}
-      >
-        <Ionicons name="archive" size={16} color="#fff" />
-        <Text style={styles.archivedChipText}>Archived ({archivedIds.size})</Text>
-      </Pressable>
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        {isOnline === false && (
+          <View style={styles.hdrChipOffline}>
+            <Ionicons name="cloud-offline" size={14} color="#fff" />
+            <Text style={styles.hdrChipText}>Offline</Text>
+          </View>
+        )}
+        {isOnline === true && (
+          <View style={styles.hdrChipOnline}>
+            <Ionicons name="cloud-done" size={14} color="#065f46" />
+            <Text style={[styles.hdrChipText, { color: '#065f46' }]}>Online</Text>
+          </View>
+        )}
+        {outboxDeletes?.length > 0 && (
+          <View style={styles.hdrChipQueued}>
+            <Ionicons name="swap-vertical" size={14} color="#fff" />
+            <Text style={styles.hdrChipText}>Queued {outboxDeletes.length}</Text>
+          </View>
+        )}
+        {archivedIds.size > 0 && (
+          <Pressable
+            onPress={() => setArchivedOpen(true)}
+            style={[styles.archivedChip, { marginBottom: 0, marginLeft: 8 }]}
+            accessibilityRole="button"
+            accessibilityLabel={`Open archived receipts (${archivedIds.size})`}
+          >
+            <Ionicons name="archive" size={16} color="#fff" />
+            <Text style={styles.archivedChipText}>Archived ({archivedIds.size})</Text>
+          </Pressable>
+        )}
+      </View>
     );
-  }, [archivedIds.size]);
+  }, [isOnline, archivedIds.size, outboxDeletes?.length]);
 
   useLayoutEffect(() => {
     navigation?.setOptions?.({ headerTitle: 'Receipts', headerRight: HeaderRight });
@@ -302,8 +345,63 @@ export default function ReceiptsScreen() {
 
   
 
-  // Initial: populate from cache; network only on explicit refresh/CRUD
-  useEffect(() => { load(false); }, [baseUrl, buildFromCache]);
+  // Initial: server-first when online, else cache-first; and listen for reconnect to sync
+  useEffect(() => {
+    let unsub: any;
+    (async () => {
+      try {
+        const state = await NetInfo.fetch();
+        const online = !!state.isConnected;
+        setIsOnline(online);
+        isOnlineRef.current = online; // keep ref in sync for later deferred actions (delete timers)
+        if (online) await load(true);
+        else await load(false);
+      } catch {
+        await load(false);
+      }
+      unsub = NetInfo.addEventListener(s => {
+        const prev = isOnline;
+        const now = !!s.isConnected;
+        setIsOnline(now);
+        isOnlineRef.current = now;
+        if (prev === false && now === true) {
+          // Came back online: silently refresh from server and update cache
+          load(true, { silent: true });
+          // Process pending deletes outbox
+          (async () => {
+            for (const rid of outboxDeletes || []) {
+              try {
+                const r = await fetchWithAuth(`${baseUrl.replace(/\/$/, '')}/api/v1/receipts/${rid}`, { method: 'DELETE', headers: authHeaders });
+                if (r.status === 204 || r.status === 200 || r.status === 404) {
+                  await dequeueDelete(rid);
+                }
+              } catch { /* keep in outbox for next attempt */ }
+            }
+          })();
+        }
+      });
+    })();
+    return () => { try { unsub?.(); } catch {} };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseUrl]);
+
+  // Auto-process queued deletions whenever we are online and queue changes
+  useEffect(() => {
+    if (!isOnline) return;
+    if (!outboxDeletes || outboxDeletes.length === 0) return;
+    (async () => {
+      for (const rid of outboxDeletes) {
+        try {
+          const r = await fetchWithAuth(`${baseUrl.replace(/\/$/, '')}/api/v1/receipts/${rid}`, { method: 'DELETE', headers: authHeaders });
+          if (r.status === 204 || r.status === 200 || r.status === 404) {
+            await dequeueDelete(rid);
+          }
+        } catch {/* keep for next attempt */}
+      }
+      // Refresh list silently after attempts
+      load(true, { silent: true });
+    })();
+  }, [isOnline, outboxDeletes, baseUrl, authHeaders, fetchWithAuth, dequeueDelete]);
   useEffect(() => { itemsRef.current = items; }, [items]);
   // Enable LayoutAnimation on Android
   useEffect(() => {
@@ -323,48 +421,61 @@ export default function ReceiptsScreen() {
     progressAnim.setValue(0);
     Animated.timing(progressAnim, { toValue: 1, duration: UNDO_MS, easing: Easing.linear, useNativeDriver: false }).start();
   };
+
+  // Restore delayed finalize with undo window
   const scheduleDeletion = (id: number) => {
-    // Work on a local snapshot to avoid race conditions between multiple setState calls
     let snapshot = itemsRef.current;
-    if (!snapshot || snapshot.length === 0) {
-      // If list not yet built (e.g., navigated from detail immediately), base on cache
-      snapshot = buildFromCache();
-    }
+    if (!snapshot || snapshot.length === 0) snapshot = buildFromCache();
     let target = snapshot.find(x => x.id === id);
     if (!target) {
       const rLocal = receipts[String(id)];
-      if (!rLocal) return; // nothing to delete
+      if (!rLocal) return;
       target = {
         id: rLocal.id,
         merchant: rLocal.derived?.merchant || rLocal.data?.merchant || 'Receipt',
         total: rLocal.derived?.total || rLocal.data?.total || 0,
         purchased_at: rLocal.derived?.date_str || ''
       };
-      // Ensure we consider all other items in snapshot; target may not be present
     }
     const originalIndex = Math.max(0, snapshot.findIndex(x => x.id === id));
-    // Optimistically remove target (ensure single instance removed)
-    const afterRemoval = snapshot.filter(x => x.id !== id);
-    try { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); } catch (e) { console.warn('LayoutAnimation unavailable:', (e as Error).message); }
-    setItems(afterRemoval);
-    // Start countdown animation
+    // Optimistic remove
+    try { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); } catch {}
+    setItems(prev => prev.filter(x => x.id !== id));
     startProgress();
-    // Set timer to finalize
     const timer = setTimeout(async () => {
       let ok = false;
-      try {
-        const r = await fetchWithAuth(`${baseUrl.replace(/\/$/, '')}/api/v1/receipts/${id}`, { method: 'DELETE', headers: authHeaders });
-        ok = r.status === 204 || r.status === 200;
-        if (ok) await removeReceipt(id);
-        else {
-          const body = await r.text();
-          Alert.alert('Error', body || 'Failed to delete (restoring)');
+      const online = (isOnlineRef.current === true) || (isOnline === true);
+      if (online) {
+        try {
+          const r = await fetchWithAuth(`${baseUrl.replace(/\/$/, '')}/api/v1/receipts/${id}`, { method: 'DELETE', headers: authHeaders });
+          if (r.status === 204 || r.status === 200 || r.status === 404) {
+            ok = true;
+            await removeReceipt(id);
+          } else {
+            const body = await r.text();
+            Alert.alert('Error', body || 'Failed to delete (restoring)');
+          }
+        } catch (e: any) {
+          const msg = e?.message || '';
+            const isNetFail = /Network request failed|Failed to fetch|ECONNREFUSED|ENETUNREACH/i.test(msg);
+            if (isNetFail) {
+              ok = true;
+              await queueDelete(id);
+              await removeReceipt(id);
+            } else {
+              Alert.alert('Error', msg || 'Failed to delete (restoring)');
+            }
         }
-      } catch (e: any) {
-        Alert.alert('Error', e?.message || 'Failed to delete (restoring)');
+      } else {
+        ok = true;
+        await queueDelete(id);
+        await removeReceipt(id);
       }
-      if (!ok) {
-        // Restore item at original position to preserve ordering
+      if (ok) {
+        // Refresh silently (remote if online, local if offline)
+        load(online, { silent: true });
+      } else {
+        // Restore at original position
         const filtered = itemsRef.current.filter(x => x.id !== id);
         const idx = Math.min(originalIndex >= 0 ? originalIndex : filtered.length, filtered.length);
         const next = [...filtered.slice(0, idx), target, ...filtered.slice(idx)];
@@ -372,19 +483,13 @@ export default function ReceiptsScreen() {
       }
       setPending(pendingRef.current.filter(x => x.id !== id));
     }, UNDO_MS);
-  setPending([...pendingRef.current.filter(p => p.id !== id), { id, merchant: target.merchant || 'Receipt', timer, item: target, index: originalIndex } as any]);
-  // If this was archived, drop it from archived set so state stays consistent
+    setPending([...pendingRef.current.filter(p => p.id !== id), { id, merchant: target.merchant || 'Receipt', timer, item: target, index: originalIndex } as any]);
+    // Remove from archive set immediately so undo resurrects in main list if needed
     setArchivedIds(prev => {
       if (!prev.has(id)) return prev;
-      const next = new Set(prev);
-      next.delete(id);
-      persistArchived(next);
-      return next;
+      const next = new Set(prev); next.delete(id); persistArchived(next); return next;
     });
-    // Haptic feedback (non-blocking)
-    // Fire-and-forget haptic feedback (Promise handled explicitly to satisfy lint)
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
-      .catch(e => console.warn('Haptics notification failed:', (e as Error).message));
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
   };
 
   const onArchive = (id: number) => {
@@ -444,7 +549,9 @@ export default function ReceiptsScreen() {
       const dek = generateDEK(32);
       const dek_wrap_srv = rsaOaepWrapDek(pem, dek);
       const now = Math.floor(Date.now() / 1000);
-      const token = await mintGrantJWT(deviceId, privB64, { sub: '1', scope: ['receipt:ingest'], jti: String(now), iat: now, nbf: now - 5, exp: now + 120 });
+      // Use a unique jti per ingest to avoid replay collisions (second-level timestamp can collide)
+      const rand = Math.random().toString(36).slice(2);
+      const token = await mintGrantJWT(deviceId, privB64, { sub: '1', scope: ['receipt:ingest'], jti: `${now}-${rand}`, iat: now, nbf: now - 5, exp: now + 180 });
       const resp: any = await api.ingestReceipt({ token, dek_wrap_srv, year: new Date().getFullYear(), month: new Date().getMonth() + 1, category: 'Uncategorized', image, authHeaders });
       if (resp.receipt_id) {
         const merch = resp?.derived?.merchant || resp?.data?.merchant || 'Receipt';
@@ -453,7 +560,30 @@ export default function ReceiptsScreen() {
         Alert.alert('Ingested', `#${resp.receipt_id} • ${merch}${total ? ' • ' + cur + ' ' + total : ''}`);
         await setReceiptDekWrap(resp.receipt_id, dek_wrap_srv);
         await setReceiptData(resp.receipt_id, resp.data, resp.derived);
-        load();
+        // Show immediately by injecting the new item into UI
+        const newItem: Receipt = {
+          id: Number(resp.receipt_id),
+          merchant: merch,
+          total: typeof total === 'number' ? total : Number(total) || 0,
+          purchased_at: String(resp?.derived?.date_str || resp?.data?.date || ''),
+          currency: cur,
+        } as any;
+        setItems(prev => {
+          const filtered = prev.filter(x => x.id !== newItem.id);
+          return [newItem, ...filtered];
+        });
+        // Then reconcile with server; do a brief delay to let server commit and return updated list
+        // Try to show server-confirmed list; retry once if needed for eventual consistency
+        try { await new Promise(r => setTimeout(r, 600)); } catch {}
+        await load(true); // non-silent to ensure visible refresh
+        // If the newly created receipt isn't present yet, retry once after a short delay
+        try {
+          const present = (itemsRef.current || []).some(x => Number(x.id) === Number(resp.receipt_id));
+          if (!present) {
+            await new Promise(r => setTimeout(r, 1000));
+            await load(true);
+          }
+        } catch {}
       } else {
         Alert.alert('Error', resp?.detail || 'Ingest failed');
       }
@@ -544,12 +674,28 @@ export default function ReceiptsScreen() {
       />
     );
   } else if (isEmpty) {
+    // Render a FlatList even when empty so pull-to-refresh works
     content = (
-      <View style={styles.empty}>
-        <Ionicons name="document-text-outline" size={72} color="#94a3b8" />
-        <Text style={styles.emptyTitle}>No receipts yet</Text>
-        <Text style={styles.emptyText}>Tap the + button to ingest your first receipt.</Text>
-      </View>
+      <FlatList
+        data={[] as any[]}
+        refreshing={loading}
+        onRefresh={() => load(true)}
+        keyExtractor={(x, i) => String(i)}
+        renderItem={() => null as any}
+        contentContainerStyle={[styles.listContent, { flex: 1 }]}
+        ListEmptyComponent={(
+          <View style={styles.empty}>
+            <Ionicons name="document-text-outline" size={72} color="#94a3b8" />
+            <Text style={styles.emptyTitle}>No receipts yet</Text>
+            <Text style={styles.emptyText}>Pull to refresh or tap + to ingest.</Text>
+            <View style={{ marginTop: 12 }}>
+              <Pressable onPress={() => load(true)} style={styles.refreshButton}>
+                <Text style={styles.refreshButtonText}>Refresh</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+      />
     );
   } else {
     const active = items.filter(x => !archivedIds.has(x.id));
@@ -690,6 +836,10 @@ export default function ReceiptsScreen() {
 
 const styles = StyleSheet.create({
   c: { flex: 1, backgroundColor: '#f1f5f9' },
+  hdrChipOffline: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#ef4444', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999 },
+  hdrChipOnline: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#a7f3d0', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, borderWidth: StyleSheet.hairlineWidth, borderColor: '#34d399', marginLeft: 0 },
+  hdrChipQueued: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f59e0b', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, marginLeft: 8 },
+  hdrChipText: { color: '#fff', fontWeight: '600', marginLeft: 6 },
   listContent: { padding: 12, paddingBottom: 120 },
   touchWrap: { borderRadius: 14 },
   itemCard: { padding: 12, borderRadius: 18, backgroundColor: '#fff', marginBottom: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: '#e2e8f0',
@@ -715,6 +865,8 @@ const styles = StyleSheet.create({
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   emptyTitle: { marginTop: 12, fontSize: 18, fontWeight: '700', color: '#334155' },
   emptyText: { marginTop: 6, color: '#64748b' },
+  refreshButton: { alignSelf: 'center', paddingHorizontal: 14, paddingVertical: 8, backgroundColor: '#4f46e5', borderRadius: 6 },
+  refreshButtonText: { color: '#fff', fontWeight: '700' },
   swipeAction: { flex: 1, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'flex-end', marginVertical: 6 },
   swipeActionRightWrap: { flex: 1, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'flex-end', marginVertical: 6 },
   swipeActionLeftWrap: { flex: 1, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'flex-start', marginVertical: 6 },

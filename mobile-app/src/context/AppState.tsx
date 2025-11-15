@@ -27,6 +27,10 @@ type AppState = {
   // Budgets per category (monthly limits)
   budgets: Record<string, number>;
   setBudget: (category: string, amount: number | null) => Promise<void>;
+  // Offline outbox for pending operations
+  outboxDeletes: number[];
+  queueDelete: (id: number) => Promise<void>;
+  dequeueDelete: (id: number) => Promise<void>;
   hydrated: boolean; // initial secure store / async storage load complete
 };
 
@@ -45,7 +49,7 @@ function toB64Ascii(str: string): string {
 }
 
 export function AppStateProvider({ children }: Readonly<{ children: React.ReactNode }>) {
-  const [baseUrl, setBaseUrl] = useState('http://10.0.2.2:8000');
+  const [baseUrl, setBaseUrl] = useState(process.env.EXPO_PUBLIC_BASE_URL || 'http://10.0.2.2:8000');
   const [username, setUsername] = useState('tester');
   const [password, setPassword] = useState('pass1234');
   const [deviceId, setDeviceId] = useState('device-mobile-1');
@@ -58,6 +62,7 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
   const [dekWraps, setDekWraps] = useState<Record<string, string>>({});
   const [receipts, setReceipts] = useState<Record<string, { id: number; data?: any; derived?: any; updatedAt: string }>>({});
   const [budgets, setBudgets] = useState<Record<string, number>>({});
+  const [outboxDeletes, setOutboxDeletes] = useState<number[]>([]);
   const [onAuthFailure, setOnAuthFailure] = useState<(() => void) | null>(null);
   const [hydrated, setHydrated] = useState(false);
 
@@ -116,26 +121,29 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
         if (oldBudgets) await store.remove('budgets');
       }
 
-      // Load large JSON blobs from AsyncStorage
-      const [aWraps, aReceipts, aBudgets] = await Promise.all([
-        AsyncStorage.getItem('dekWraps'),
-        AsyncStorage.getItem('receiptsCache'),
-        AsyncStorage.getItem('budgets'),
+      // Load large JSON blobs from AsyncStorage (user-scoped)
+      const u = sUser || username;
+      const [aWraps, aReceipts, aBudgets, aOutDel] = await Promise.all([
+        AsyncStorage.getItem(`dekWraps:${u}`),
+        AsyncStorage.getItem(`receiptsCache:${u}`),
+        AsyncStorage.getItem(`budgets:${u}`),
+        AsyncStorage.getItem(`outbox:deletes:${u}`),
       ]);
       if (aWraps) { try { setDekWraps(JSON.parse(aWraps)); } catch {} }
       if (aReceipts) { try { setReceipts(JSON.parse(aReceipts)); } catch {} }
       if (aBudgets) { try { setBudgets(JSON.parse(aBudgets) || {}); } catch {} }
+      if (aOutDel) { try { setOutboxDeletes((JSON.parse(aOutDel) || []).map(Number).filter((n: number)=>Number.isFinite(n))); } catch {} }
       // Proactive access token refresh if expired and refresh token present
       const needsRefresh = (() => {
         if (!sAccess) return false;
         try {
           const payloadB64 = sAccess.split('.')[1];
           if (!payloadB64) return false;
-          const norm = payloadB64.replace(/-/g,'+').replace(/_/g,'/');
+          const norm = payloadB64.replaceAll('-', '+').replaceAll('_', '/');
           const pad = norm + '==='.slice((norm.length % 4));
           const bytes = base64js.toByteArray(pad);
           let json = '';
-          for (let i=0;i<bytes.length;i++) json += String.fromCharCode(bytes[i]);
+          for (const b of bytes as any) json += String.fromCodePoint(b as number);
           const parsed = JSON.parse(json);
           const exp = parsed?.exp;
           if (!exp || typeof exp !== 'number') return false;
@@ -163,6 +171,7 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
     return () => { cancelled = true; };
   }, []);
 
+  const DEBUG_NET = (process.env.EXPO_PUBLIC_DEBUG_NETWORK === '1');
   const authHeaders = useMemo(() => {
     if (accessToken) return { Authorization: `Bearer ${accessToken}` };
     return { Authorization: `Basic ${toB64Ascii(username + ':' + password)}` };
@@ -176,7 +185,13 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
       if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
       else headers.set('Authorization', `Basic ${toB64Ascii(username + ':' + password)}`);
     }
+    // Correlate with backend logs if RequestID middleware is present
+    const reqId = Math.random().toString(36).slice(2);
+    headers.set('X-Client-Request-ID', reqId);
+    const started = Date.now();
+    if (DEBUG_NET) console.log('[net] start', { url, method: (init?.method||'GET'), reqId });
     let res = await fetch(url, { ...init, headers });
+    if (DEBUG_NET) console.log('[net] end', { url, status: res.status, ms: Date.now()-started, reqId });
     if (res.status !== 401 || !refreshToken) return res;
     // Attempt refresh
     try {
@@ -195,6 +210,7 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
       await setTokens?.(data.access, data.refresh ?? refreshToken);
       const retryHeaders = new Headers(init?.headers as any);
       retryHeaders.set('Authorization', `Bearer ${data.access}`);
+      retryHeaders.set('X-Client-Request-ID', reqId + '-retry');
       res = await fetch(url, { ...init, headers: retryHeaders });
       return res;
     } catch {
@@ -226,8 +242,28 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
     ]);
   };
 
+  // Clear caches for the current or provided username (and legacy keys)
+  const clearUserCaches = async (u?: string) => {
+    const user = (u ?? username) || '__anon__';
+    try {
+      await AsyncStorage.multiRemove([
+        `dekWraps:${user}`, `receiptsCache:${user}`, `budgets:${user}`,
+        `outbox:deletes:${user}`,
+        // legacy keys (pre user-scoping)
+        'dekWraps', 'receiptsCache', 'budgets',
+        // screen-level archived key (legacy and user-scoped)
+        'archived_receipt_ids_v1', `archived_receipt_ids_v1:${user}`,
+      ]);
+    } catch {}
+    setDekWraps({});
+    setReceipts({});
+    setBudgets({});
+    setOutboxDeletes([]);
+  };
+
   const logout = async () => {
     await setTokens(null, null);
+    await clearUserCaches();
     await markRegistered(false);
     onAuthFailure?.();
   };
@@ -241,7 +277,7 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
     setDekWraps(prev => {
       const next = { ...prev, [String(id)]: wrap };
       // Persist in AsyncStorage (fire and forget)
-      AsyncStorage.setItem('dekWraps', JSON.stringify(next));
+      AsyncStorage.setItem(`dekWraps:${username}`, JSON.stringify(next));
       return next;
     });
   };
@@ -250,7 +286,7 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
     setReceipts(prev => {
       const key = String(id);
       const next = { ...prev, [key]: { id, data, derived, updatedAt: new Date().toISOString() } };
-      AsyncStorage.setItem('receiptsCache', JSON.stringify(next));
+      AsyncStorage.setItem(`receiptsCache:${username}`, JSON.stringify(next));
       return next;
     });
   };
@@ -266,7 +302,7 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
       } else {
         next[cat] = amount;
       }
-      AsyncStorage.setItem('budgets', JSON.stringify(next));
+      AsyncStorage.setItem(`budgets:${username}`, JSON.stringify(next));
       return next;
     });
   };
@@ -276,18 +312,46 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
     setReceipts(prev => {
       const next = { ...prev };
       delete next[key];
-      AsyncStorage.setItem('receiptsCache', JSON.stringify(next));
+      AsyncStorage.setItem(`receiptsCache:${username}`, JSON.stringify(next));
       return next;
     });
     setDekWraps(prev => {
       const next = { ...prev };
       if (key in next) delete next[key];
-      AsyncStorage.setItem('dekWraps', JSON.stringify(next));
+      AsyncStorage.setItem(`dekWraps:${username}`, JSON.stringify(next));
       return next;
     });
   };
 
-  const value = useMemo<AppState>(() => ({ baseUrl, setBaseUrl, username, setUsername, password, setPassword, deviceId, setDeviceId, pubB64, setPubB64, privB64, setPrivB64, pem, setPem, registered, setRegistered: markRegistered, authHeaders, fetchWithAuth, logout, setOnAuthFailure, save, dekWraps, setReceiptDekWrap, receipts, setReceiptData, removeReceipt, budgets, setBudget, accessToken, refreshToken, setTokens, hydrated }), [baseUrl, username, password, deviceId, pubB64, privB64, pem, registered, authHeaders, fetchWithAuth, logout, setOnAuthFailure, dekWraps, receipts, budgets, accessToken, refreshToken, hydrated]);
+  const queueDelete = async (id: number) => {
+    setOutboxDeletes(prev => {
+      if (prev.includes(id)) return prev;
+      const next = [...prev, id];
+      AsyncStorage.setItem(`outbox:deletes:${username}`, JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const dequeueDelete = async (id: number) => {
+    setOutboxDeletes(prev => {
+      const next = prev.filter(x => x !== id);
+      AsyncStorage.setItem(`outbox:deletes:${username}`, JSON.stringify(next));
+      return next;
+    });
+  };
+
+  // If username changes via save(), clear caches for old user to prevent leakage
+  const prevUsernameRef = React.useRef(username);
+  useEffect(() => {
+    const prev = prevUsernameRef.current;
+    if (prev !== username) {
+      // Clear previous user's caches
+      clearUserCaches(prev);
+      prevUsernameRef.current = username;
+    }
+  }, [username]);
+
+  const value = useMemo<AppState>(() => ({ baseUrl, setBaseUrl, username, setUsername, password, setPassword, deviceId, setDeviceId, pubB64, setPubB64, privB64, setPrivB64, pem, setPem, registered, setRegistered: markRegistered, authHeaders, fetchWithAuth, logout, setOnAuthFailure, save, dekWraps, setReceiptDekWrap, receipts, setReceiptData, removeReceipt, budgets, setBudget, outboxDeletes, queueDelete, dequeueDelete, accessToken, refreshToken, setTokens, hydrated }), [baseUrl, username, password, deviceId, pubB64, privB64, pem, registered, authHeaders, fetchWithAuth, logout, setOnAuthFailure, dekWraps, receipts, budgets, outboxDeletes, accessToken, refreshToken, hydrated]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
