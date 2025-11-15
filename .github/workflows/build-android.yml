@@ -73,15 +73,22 @@ jobs:
           # Install eas-cli globally as before
           npm i -g eas-cli@latest
 
-      - name: Expo login via token
+      - name: Set Expo/EAS token
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
         run: |
+          set -euo pipefail
           TOKEN="${EXPO_TOKEN:-$EAS_TOKEN}"
           if [ -z "$TOKEN" ]; then echo "Expo token secret not set (EXPO_TOKEN or EAS_TOKEN)" && exit 1; fi
-          eas login --token "$TOKEN"
-          eas whoami || true
+          echo "Using Expo/EAS token (masked)."
+          echo "::add-mask::$TOKEN"
+          # Newer eas-cli picks up EAS_ACCESS_TOKEN automatically; keep legacy EXPO_TOKEN too
+          export EAS_ACCESS_TOKEN="$TOKEN"
+          export EXPO_TOKEN="$TOKEN"
+          eas --version
+          # Diagnostic (will use token env automatically)
+          eas whoami || echo "whoami did not authenticate interactively; relying on token env for build"
 
       - name: Build APK (preview)
         run: |
