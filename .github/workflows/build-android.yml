@@ -11,6 +11,9 @@ on:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EAS_ACCESS_TOKEN: ${{ secrets.EXPO_TOKEN }}
     defaults:
       run:
         working-directory: mobile-app
@@ -76,16 +79,14 @@ jobs:
       - name: Expo auth (non-interactive)
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
         run: |
           set -euo pipefail
-          TOKEN="${EAS_TOKEN:-${EXPO_TOKEN:-}}"
-          if [ -z "$TOKEN" ]; then
-            echo "Expo/EAS token secret not set (EAS_TOKEN or EXPO_TOKEN)" >&2
-            exit 1
-          fi
+          TOKEN="${EXPO_TOKEN:-}"
+          if [ -z "$TOKEN" ]; then echo "EXPO_TOKEN secret not set" >&2; exit 1; fi
           # Export for eas-cli; no interactive login needed
-          export EAS_TOKEN="$TOKEN"
+          # Persist for subsequent steps explicitly
+          echo "EXPO_TOKEN=$TOKEN" >> $GITHUB_ENV
+          echo "EAS_ACCESS_TOKEN=$TOKEN" >> $GITHUB_ENV
           echo "EAS token exported (hidden). Verifying authentication..."
           if ! eas whoami; then
             echo "Authentication failed; check token validity or scope." >&2
