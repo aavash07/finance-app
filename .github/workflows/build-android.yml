@@ -97,12 +97,37 @@ jobs:
             exit 1
           fi
 
+      - name: Prepare Android credentials (local)
+        run: |
+          set -euo pipefail
+          # Decode keystore from base64 secret into file
+          echo "$EAS_BUILD_ANDROID_KEYSTORE_BASE64" | base64 -d > financekit-mobile.keystore
+          if [ ! -s financekit-mobile.keystore ]; then echo "Keystore decode failed" >&2; exit 1; fi
+          # Write credentials.json required for credentialsSource=local
+          cat > credentials.json <<'EOF'
+          {
+            "android": {
+              "keystore": {
+                "keystorePath": "financekit-mobile.keystore",
+                "keystorePassword": "${EAS_BUILD_ANDROID_KEYSTORE_PASSWORD}",
+                "keyAlias": "${EAS_BUILD_ANDROID_KEYSTORE_ALIAS}",
+                "keyPassword": "${EAS_BUILD_ANDROID_KEY_PASSWORD}"
+              }
+            }
+          }
+          EOF
+          # Show limited confirmation (do not cat keystore)
+          echo "credentials.json generated:"; grep -v 'Password' credentials.json || true
+          # Basic validation
+          jq '.android.keystore.keystorePath' credentials.json >/dev/null 2>&1 || { echo "Invalid credentials.json" >&2; exit 1; }
+
       - name: Build APK (preview)
         run: |
           # Validate local Android credential env vars (credentialsSource=local)
           for v in EAS_BUILD_ANDROID_KEYSTORE_BASE64 EAS_BUILD_ANDROID_KEYSTORE_PASSWORD EAS_BUILD_ANDROID_KEY_PASSWORD EAS_BUILD_ANDROID_KEYSTORE_ALIAS; do
             if [ -z "${!v:-}" ]; then echo "Missing required Android credential env: $v" >&2; exit 1; fi
           done
+          if [ ! -f credentials.json ]; then echo "credentials.json missing; generation step failed" >&2; exit 1; fi
           eas build -p android --profile preview --non-interactive --wait
 
       - name: Download latest APK

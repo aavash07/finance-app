@@ -270,3 +270,191 @@ make superuser    # create admin user
 make run          # runserver 0.0.0.0:8000
 make test         # run tests
 ```
+
+## Android CI Build (EAS + GitHub Actions)
+
+This section documents how to produce a signed Android preview APK automatically via GitHub Actions using Expo Application Services (EAS).
+
+### 1. Prerequisites
+
+| Item | Why |
+|------|-----|
+| Expo project linked (`eas init`) | Associates the project with your Expo account so builds work in CI. |
+| Programmatic access token | Non‑interactive auth; create in Expo Dashboard → Account → Access Tokens. |
+| GitHub Actions workflow | Automates build, artifact upload, optional release publishing. |
+| Android keystore (JKS) | Required for signing when using local credentials. |
+
+Ensure `eas.json` contains a build profile (e.g. `preview`) and (for local credentials) sets:
+
+```jsonc
+// mobile-app/eas.json (excerpt)
+"preview": {
+	"android": {
+		"buildType": "apk",
+		"credentialsSource": "local"
+	},
+	"env": { "EXPO_PUBLIC_BASE_URL": "https://your-backend" }
+}
+```
+
+If you omit `credentialsSource`, Expo can manage credentials remotely (see Remote Credentials below).
+
+### 2. Secrets (GitHub → Settings → Secrets and variables → Actions)
+
+Create these repository secrets:
+
+| Secret Name | Value |
+|-------------|-------|
+| `EXPO_TOKEN` | Programmatic access token from Expo dashboard |
+| `ANDROID_KEYSTORE_BASE64` | Base64 of your keystore file (.jks) |
+| `ANDROID_KEYSTORE_PASSWORD` | Keystore (store) password |
+| `ANDROID_KEY_PASSWORD` | Key (alias) password (often same) |
+| `ANDROID_KEYSTORE_ALIAS` | Alias used when generating the key |
+
+The workflow exports them as environment variables with the names EAS expects:
+
+| Workflow Env | Source Secret |
+|--------------|---------------|
+| `EAS_ACCESS_TOKEN` / `EXPO_TOKEN` | `EXPO_TOKEN` |
+| `EAS_BUILD_ANDROID_KEYSTORE_BASE64` | `ANDROID_KEYSTORE_BASE64` |
+| `EAS_BUILD_ANDROID_KEYSTORE_PASSWORD` | `ANDROID_KEYSTORE_PASSWORD` |
+| `EAS_BUILD_ANDROID_KEY_PASSWORD` | `ANDROID_KEY_PASSWORD` |
+| `EAS_BUILD_ANDROID_KEYSTORE_ALIAS` | `ANDROID_KEYSTORE_ALIAS` |
+
+### 3. Generate a Keystore (local credentials path)
+
+Windows (PowerShell):
+```powershell
+$alias = "financekitmobile"
+$password = "CHOOSE_STRONG_PASSWORD"
+& "$env:JAVA_HOME\bin\keytool.exe" -genkeypair `
+	-v -keystore financekit-mobile.keystore `
+	-alias $alias -keyalg RSA -keysize 2048 -validity 10000 `
+	-storepass $password -keypass $password `
+	-dname "CN=FinanceKit,O=FinanceKit,L=City,S=State,C=US"
+```
+
+macOS / Linux:
+```bash
+alias=financekitmobile
+password=CHOOSE_STRONG_PASSWORD
+keytool -genkeypair -v \
+	-keystore financekit-mobile.keystore \
+	-alias "$alias" -keyalg RSA -keysize 2048 -validity 10000 \
+	-storepass "$password" -keypass "$password" \
+	-dname "CN=FinanceKit,O=FinanceKit,L=City,S=State,C=US"
+```
+
+Base64 encode for secret:
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("financekit-mobile.keystore")) | Set-Content -NoNewline android.keystore.b64
+```
+```bash
+base64 -w0 financekit-mobile.keystore > android.keystore.b64  # Linux
+base64 financekit-mobile.keystore > android.keystore.b64      # macOS
+```
+Copy the file contents into `ANDROID_KEYSTORE_BASE64`.
+
+Verify keystore locally:
+```powershell
+& "$env:JAVA_HOME\bin\keytool.exe" -list -v -keystore financekit-mobile.keystore -storepass $password
+```
+
+### 4. Example GitHub Actions Workflow (excerpt)
+
+```yaml
+name: Build Android APK (EAS)
+on:
+	workflow_dispatch:
+	push:
+		branches: [ main ]
+jobs:
+	build-apk:
+		runs-on: ubuntu-latest
+		env:
+			EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+			EAS_ACCESS_TOKEN: ${{ secrets.EXPO_TOKEN }}
+			EAS_BUILD_ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+			EAS_BUILD_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+			EAS_BUILD_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+			EAS_BUILD_ANDROID_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
+		defaults:
+			run:
+				working-directory: mobile-app
+		steps:
+			- uses: actions/checkout@v4
+			- uses: actions/setup-node@v4
+				with: { node-version: '20' }
+			- name: Pack internal SDK
+				working-directory: rn-sdk
+				run: |
+					npm ci
+					npm run build
+					tgz=$(npm pack --silent)
+					cp "$tgz" ../mobile-app/
+			- name: Install app deps
+				run: npm ci && npm i -g eas-cli@latest
+			- name: Auth
+				run: |
+					echo "EXPO_TOKEN=$EXPO_TOKEN" >> $GITHUB_ENV
+					eas whoami
+			- name: Build APK
+				run: |
+					for v in EAS_BUILD_ANDROID_KEYSTORE_BASE64 EAS_BUILD_ANDROID_KEYSTORE_PASSWORD EAS_BUILD_ANDROID_KEY_PASSWORD EAS_BUILD_ANDROID_KEYSTORE_ALIAS; do
+						[ -z "${!v:-}" ] && echo "Missing $v" && exit 1
+					done
+					eas build -p android --profile preview --non-interactive --wait
+			- uses: actions/upload-artifact@v4
+				with:
+					name: financekit-preview-apk
+					path: mobile-app/dist/financekit-preview.apk
+```
+
+### 5. Internal SDK Dependency Options
+
+Current approach uses a packed tarball: `"@financekit/rn-sdk": "file:../rn-sdk/financekit-rn-sdk-0.1.0.tgz"`.
+
+Simpler alternative: switch to folder reference:
+```json
+"@financekit/rn-sdk": "file:../rn-sdk"
+```
+Then in CI:
+```yaml
+- working-directory: rn-sdk
+	run: npm ci && npm run build
+- run: npm install  # (NOT npm ci first time after change, to update lockfile)
+```
+Commit the updated `package-lock.json`. This removes the need for `npm pack`.
+
+### 6. Remote Credentials Alternative
+
+If you prefer Expo-managed credentials:
+1. Remove `"credentialsSource": "local"` from `eas.json`.
+2. Run locally (interactive): `eas build -p android --profile preview` and let Expo create/store the keystore.
+3. Commit changes; CI builds no longer need the keystore secrets.
+
+### 7. Common Errors & Fixes
+
+| Error Message | Cause | Fix |
+|---------------|-------|-----|
+| `Generating a new Keystore is not supported in non-interactive mode` | Local credentials selected but keystore secrets missing | Provide all four Android secrets or switch to remote credentials |
+| `An Expo user account is required to proceed` | Token not exported to build step | Ensure `EXPO_TOKEN` / `EAS_ACCESS_TOKEN` env present at job level before `eas build` |
+| `ENOENT ... financekit-rn-sdk-0.1.0.tgz` | Tarball not packed/copied before `npm ci` | Add `npm pack` step or switch to folder dependency |
+| Interactive prompt hangs | Missing `--non-interactive` flag | Include `--non-interactive` in CI build command |
+
+### 8. Security Notes
+
+- Treat `EXPO_TOKEN` and keystore secrets as sensitive; rotate if leaked.
+- Do NOT commit the keystore file or its Base64 contents.
+- Use unique, strong passwords; avoid sharing the same token for multiple repos with broad scopes.
+
+### 9. Quick Verification Checklist
+
+Before relying on CI:
+1. `eas whoami` succeeds locally with token.
+2. `eas build -p android --profile preview` completes (interactive if using remote credentials first time).
+3. All secrets show as defined in GitHub UI.
+4. Workflow run log shows keystore validation passing before build.
+
+Once complete, download the uploaded artifact (preview APK) from the workflow run or release page and distribute for testing.
+
