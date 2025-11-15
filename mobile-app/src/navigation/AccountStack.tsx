@@ -1,12 +1,10 @@
 import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import AccountScreen from '../screens/AccountScreen';
-import SettingsScreen from '../screens/SettingsScreen';
 import DeviceSetupScreen from '../screens/DeviceSetupScreen';
 
 export type AccountStackParamList = {
   AccountHome: undefined;
-  Settings: undefined;
   DeviceSetup: undefined;
 };
 
@@ -16,7 +14,6 @@ export default function AccountStack() {
   return (
     <Stack.Navigator>
       <Stack.Screen name="AccountHome" component={AccountScreen} options={{ title: 'Account' }} />
-      <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: 'Settings' }} />
       <Stack.Screen name="DeviceSetup" component={DeviceSetupScreen} options={{ title: 'Device' }} />
     </Stack.Navigator>
   );

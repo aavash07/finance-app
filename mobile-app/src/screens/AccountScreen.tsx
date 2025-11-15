@@ -12,10 +12,9 @@ export default function AccountScreen() {
   return (
     <View style={styles.c}>
       <Text style={styles.welcome}>Welcome, <Text style={styles.user}>{username}</Text></Text>
-      <Text style={styles.subtitle}>Manage your account, device, and settings below.</Text>
+      <Text style={styles.subtitle}>Manage your account and device below.</Text>
 
       <View style={styles.links}>
-        <Pressable onPress={() => nav.navigate('Settings')} style={styles.linkBtn}><Text style={styles.linkTxt}>App Settings</Text></Pressable>
         <Pressable onPress={() => nav.navigate('DeviceSetup')} style={styles.linkBtn}><Text style={styles.linkTxt}>Device Setup</Text></Pressable>
         <Pressable onPress={logout} style={[styles.linkBtn, styles.danger]}><Text style={[styles.linkTxt, styles.dangerTxt]}>Log Out</Text></Pressable>
       </View>
