@@ -1,0 +1,62 @@
+name: Build Android APK (EAS)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile-app
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm i -g eas-cli@latest
+
+      - name: EAS login via token
+        env:
+          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
+        run: |
+          if [ -z "$EAS_TOKEN" ]; then echo "EAS_TOKEN secret not set" && exit 1; fi
+          eas whoami || true
+
+      - name: Build APK (preview)
+        env:
+          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
+        run: |
+          eas build -p android --profile preview --non-interactive --wait
+
+      - name: Download latest APK
+        env:
+          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
+        run: |
+          mkdir -p dist
+          eas build:download --platform android --latest --path dist/financekit-preview.apk
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: financekit-preview-apk
+          path: mobile-app/dist/financekit-preview.apk
+
+      - name: Publish GitHub Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: mobile-app/dist/financekit-preview.apk
+          name: FinanceKit Android Preview ${{ github.ref_name }}
+          draft: false
+          prerelease: true
