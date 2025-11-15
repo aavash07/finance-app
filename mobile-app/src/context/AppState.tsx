@@ -4,6 +4,9 @@ import { ExpoSecureStore } from '../secureStore';
 import * as base64js from 'base64-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+// Minimal declaration so TypeScript accepts process.env in RN/Expo without adding full Node types.
+declare const process: { env: { [k: string]: string | undefined } };
+
 type AppState = {
   baseUrl: string; setBaseUrl: (s: string) => void;
   username: string; setUsername: (s: string) => void;

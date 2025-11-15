@@ -37,6 +37,8 @@ jobs:
           npm install
           npm run build # prepare already builds, but explicit for logs
           ls -la dist || { echo "Missing dist output" >&2; exit 1; }
+          # Persist built SDK to speed mobile-app install (folder dep will pack existing dist)
+          echo "RN SDK prepared"
 
       - name: Install mobile-app dependencies
         run: |

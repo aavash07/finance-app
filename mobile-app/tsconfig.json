@@ -1,11 +1,18 @@
 {
+  "extends": "expo/tsconfig.base",
   "compilerOptions": {
-    "target": "ES2019",
+    "target": "ES2021",
     "module": "ESNext",
     "jsx": "react-jsx",
     "strict": true,
     "esModuleInterop": true,
-    "skipLibCheck": true
-  },
-  "extends": "expo/tsconfig.base"
+    "skipLibCheck": true,
+    "moduleResolution": "Node",
+    "types": ["expo", "react", "react-native"],
+    "lib": ["ES2021", "DOM"],
+    "baseUrl": "./",
+    "paths": {
+      "@financekit/rn-sdk": ["../rn-sdk/dist"]
+    }
+  }
 }

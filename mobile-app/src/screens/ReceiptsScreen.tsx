@@ -814,7 +814,7 @@ export default function ReceiptsScreen() {
 
       {/* Undo toast (show most recent pending deletion) */}
       {pending.length > 0 && (() => {
-        const last = pending.at(-1)!;
+        const last = pending[pending.length - 1];
         const remaining = Math.max(0, UNDO_MS - Math.round((progressAnim as any)._value * UNDO_MS));
         const secondsLeft = Math.ceil(remaining / 1000);
         const widthInterpolate = progressAnim.interpolate({ inputRange: [0,1], outputRange: ['100%','0%'] });
