@@ -248,7 +248,7 @@ python manage.py createsuperuser
 python manage.py runserver 0.0.0.0:8000
 ```
 
-From Windows, you can hit it at `http://localhost:8000`. From the Android emulator in Expo, use `http://10.0.2.2:8000` (the mobile app defaults to this).
+From Windows, you can hit it at `http://localhost:8000`. From the Android emulator in Expo, use `http://10.0.2.2:8000`. The mobile app now defaults to the Azure backend URL unless you set `EXPO_PUBLIC_USE_LOCAL=1` (or provide an explicit `EXPO_PUBLIC_BASE_URL`).
 
 Note: If you prefer SQLite for quick experiments, set `DB_ENGINE=sqlite` in `.env` (not recommended for Postgres features, but handy for fast local runs). No changes are needed when using Docker Postgres in WSL.
 

@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { Platform } from 'react-native';
 import { ExpoSecureStore } from '../secureStore';
 import * as base64js from 'base64-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -49,7 +50,16 @@ function toB64Ascii(str: string): string {
 }
 
 export function AppStateProvider({ children }: Readonly<{ children: React.ReactNode }>) {
-  const [baseUrl, setBaseUrl] = useState(process.env.EXPO_PUBLIC_BASE_URL || 'http://10.0.2.2:8000');
+  // Default base URL logic:
+  // - If EXPO_PUBLIC_BASE_URL is set, use it
+  // - Else if EXPO_PUBLIC_USE_LOCAL=1 or in __DEV__ (no override), use localhost (10.0.2.2 on Android emulator)
+  // - Else fall back to the Azure default URL
+  const DEFAULT_AZURE_URL = process.env.EXPO_PUBLIC_DEFAULT_AZURE_URL || 'https://financekit-backend-byeud6e5hra6epf0.eastus-01.azurewebsites.net';
+  const localUrl = Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://localhost:8000';
+  const envBase = process.env.EXPO_PUBLIC_BASE_URL;
+  const preferLocal = (process.env.EXPO_PUBLIC_USE_LOCAL === '1') || (!!__DEV__ && !envBase);
+  const initialBase = envBase || (preferLocal ? localUrl : DEFAULT_AZURE_URL);
+  const [baseUrl, setBaseUrl] = useState(initialBase);
   const [username, setUsername] = useState('tester');
   const [password, setPassword] = useState('pass1234');
   const [deviceId, setDeviceId] = useState('device-mobile-1');
