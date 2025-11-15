@@ -12,6 +12,7 @@ from .views import (
     RegisterView,
     ReceiptListView,
     ReceiptDetailView,
+    HealthView,
 )
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
@@ -24,6 +25,7 @@ urlpatterns = [
     path("analytics/spend", AnalyticsSpendView.as_view()),
     path("receipts", ReceiptListView.as_view()),
     path("receipts/<int:pk>", ReceiptDetailView.as_view()),
+    path("health", HealthView.as_view()),
     # Auth endpoints
     path("auth/register", RegisterView.as_view()),
     path("auth/token", TokenObtainPairView.as_view(), name='token_obtain_pair'),

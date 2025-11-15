@@ -82,6 +82,13 @@ else:
         }
     }
 
+# Startup diagnostic (prints once) to confirm DB selection & paths
+try:
+    _db = DATABASES.get("default", {})
+    print(f"[startup] ENV={ENV_NAME} PROD={IS_PROD} DB_ENGINE={DB_ENGINE} NAME={_db.get('NAME')} HOST={_db.get('HOST')} SQLITE_PATH={os.getenv('SQLITE_PATH')}")
+except Exception:
+    pass
+
 AUTH_PASSWORD_VALIDATORS = []
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"

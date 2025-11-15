@@ -36,6 +36,7 @@ import secrets
 import base64
 from nacl import signing
 from nacl.encoding import Base64Encoder
+from django.db import connection, transaction
 
 # Optional Redis for single-use JTI
 def redis_client():
@@ -237,19 +238,11 @@ class DevCreateEncryptedReceiptView(APIView):
 
 
 class IngestReceiptView(APIView):
-    """
-    POST multipart/form-data with:
-      - token: short-lived EdDSA JWT (scope must include 'receipt:ingest')
-      - dek_wrap_srv: base64 RSA-OAEP wrapping of user's DEK
-      - year, month, category
-      - image: receipt photo
-    Server unwraps DEK, OCRs image, encrypts JSON with DEK, stores, zeroizes DEK, returns receipt_id.
-    """
+    """Receipt ingest endpoint (OCR + encrypt + store). Debug prints removed."""
     permission_classes = [permissions.IsAuthenticated]
     throttle_classes = [ScopedRateThrottle, UserRateThrottle]
     throttle_scope = "ingest"
 
-    @transaction.atomic
     def post(self, request):
         # Enforce throttle early to ensure 429 takes precedence
         self.check_throttles(request)
@@ -351,7 +344,8 @@ class IngestReceiptView(APIView):
                         return Decimal("0.00")
                 total_val = _to_cents(parsed_obj.get("total", 0))
 
-                rec = Receipt.objects.create(
+                # Force default DB to avoid any routing ambiguity
+                rec = Receipt.objects.using("default").create(
                     user=request.user,
                     year=year, month=month, category=category,
                     merchant=merchant[:255],
@@ -365,6 +359,7 @@ class IngestReceiptView(APIView):
                     tip_total=_to_cents(parsed_obj.get("tip_total", 0)),
                     body_nonce=nonce, body_ct=ct, body_tag=tag,
                 )
+                # (Removed debug prints)
 
                 # optional: create items
                 try:
@@ -389,8 +384,7 @@ class IngestReceiptView(APIView):
                             receipt=rec, desc=desc[:512], qty=qd, price=pd
                         )
                 except Exception:
-                    # do not fail ingest if items fail
-                    pass
+                    pass  # do not fail ingest if items fail
             except Exception as e:
                 return Response({"detail": f"DB insert failed: {e}", "trace": traceback.format_exc()}, status=500)
 
@@ -445,6 +439,7 @@ class ReceiptListView(generics.ListAPIView):
         merch = self.request.query_params.get("merchant")
         if merch:
             qs = qs.filter(merchant__icontains=merch)
+        # Debug logging removed.
         return qs.order_by("-created_at")
 
 class ReceiptDetailView(generics.RetrieveDestroyAPIView):
@@ -663,4 +658,27 @@ class DevWrapDekView(APIView):
             "dek_wrap_srv": dek_wrap_srv,   # what /ingest/ and /decrypt/ expect
             "len_bytes": len(dek),
             "alg": "RSA-OAEP-SHA256",
+        })
+
+
+class HealthView(APIView):
+    """Lightweight health/info endpoint: returns DB engine and simple counts.
+    Useful to detect mismatched DB backends (e.g., Postgres vs SQLite) and empty data scenarios in deployments.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from django.conf import settings as dj_settings
+        engine = getattr(dj_settings, 'DB_ENGINE', 'unknown')
+        # For unauthenticated requests, avoid leaking per-user counts; just total receipts
+        total_receipts = Receipt.objects.count()
+        user_receipts = None
+        if request.user and request.user.is_authenticated:
+            user_receipts = Receipt.objects.filter(user=request.user).count()
+        return Response({
+            'engine': engine,
+            'env': getattr(dj_settings, 'ENV_NAME', None),
+            'is_prod': getattr(dj_settings, 'IS_PROD', None),
+            'total_receipts': total_receipts,
+            'user_receipts': user_receipts,
         })
