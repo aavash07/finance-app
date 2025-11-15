@@ -21,27 +21,32 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Build & pack rn-sdk
+        working-directory: rn-sdk
+        run: |
+          npm ci
+          npm pack
+
       - name: Install dependencies
         run: |
           npm ci
           npm i -g eas-cli@latest
 
-      - name: EAS login via token
+      - name: Expo login via token
         env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
         run: |
-          if [ -z "$EAS_TOKEN" ]; then echo "EAS_TOKEN secret not set" && exit 1; fi
+          TOKEN="${EXPO_TOKEN:-$EAS_TOKEN}"
+          if [ -z "$TOKEN" ]; then echo "Expo token secret not set (EXPO_TOKEN or EAS_TOKEN)" && exit 1; fi
+          eas login --token "$TOKEN"
           eas whoami || true
 
       - name: Build APK (preview)
-        env:
-          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
         run: |
           eas build -p android --profile preview --non-interactive --wait
 
       - name: Download latest APK
-        env:
-          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
         run: |
           mkdir -p dist
           eas build:download --platform android --latest --path dist/financekit-preview.apk
