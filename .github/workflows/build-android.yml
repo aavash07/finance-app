@@ -27,10 +27,12 @@ jobs:
         working-directory: rn-sdk
         run: |
           npm ci
-          TAR=$(npm pack)
-          echo "Packed tarball: $TAR"
-          if [ "$TAR" != "financekit-rn-sdk-0.1.0.tgz" ]; then cp "$TAR" financekit-rn-sdk-0.1.0.tgz; fi
+          TARFILE=$(npm pack --silent | tail -n1 | tr -d '\r')
+          echo "Packed tarball: $TARFILE"
+          if [ ! -f "$TARFILE" ]; then echo "Tarball not found after pack"; exit 1; fi
+          ln -sf "$TARFILE" financekit-rn-sdk-0.1.0.tgz
           ls -l
+          echo "RN_SDK_TARBALL=$TARFILE" >> $GITHUB_ENV
 
       - name: Install dependencies (mobile-app)
         run: |
