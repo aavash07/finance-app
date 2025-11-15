@@ -12,7 +12,8 @@
     "lib": ["ES2021", "DOM"],
     "baseUrl": "./",
     "paths": {
-      "@financekit/rn-sdk": ["../rn-sdk/dist"]
+      "@financekit/rn-sdk": ["./sdk/index.ts"],
+      "@financekit/rn-sdk/*": ["./sdk/*"]
     }
   }
 }
