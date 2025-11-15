@@ -5,7 +5,8 @@
   "build": {
     "preview": {
       "android": {
-        "buildType": "apk"
+        "buildType": "apk",
+        "credentialsSource": "local"
       },
       "env": {
         "EXPO_PUBLIC_BASE_URL": "https://financekit-backend-byeud6e5hra6epf0.eastus-01.azurewebsites.net"

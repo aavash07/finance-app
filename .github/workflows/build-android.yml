@@ -14,6 +14,10 @@ jobs:
     env:
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
       EAS_ACCESS_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EAS_BUILD_ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      EAS_BUILD_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      EAS_BUILD_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      EAS_BUILD_ANDROID_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
     defaults:
       run:
         working-directory: mobile-app
@@ -95,6 +99,10 @@ jobs:
 
       - name: Build APK (preview)
         run: |
+          # Validate local Android credential env vars (credentialsSource=local)
+          for v in EAS_BUILD_ANDROID_KEYSTORE_BASE64 EAS_BUILD_ANDROID_KEYSTORE_PASSWORD EAS_BUILD_ANDROID_KEY_PASSWORD EAS_BUILD_ANDROID_KEYSTORE_ALIAS; do
+            if [ -z "${!v:-}" ]; then echo "Missing required Android credential env: $v" >&2; exit 1; fi
+          done
           eas build -p android --profile preview --non-interactive --wait
 
       - name: Download latest APK
