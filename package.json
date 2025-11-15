@@ -1,8 +1,0 @@
-{
-  "name": "financekit-monorepo",
-  "private": true,
-  "workspaces": [
-    "rn-sdk",
-    "mobile-app"
-  ]
-}
