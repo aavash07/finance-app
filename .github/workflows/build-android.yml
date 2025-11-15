@@ -30,28 +30,15 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Build & pack rn-sdk
+      - name: Prepare rn-sdk (folder dependency)
         working-directory: rn-sdk
         run: |
           set -euo pipefail
+          npm install
+          npm run build # prepare already builds, but explicit for logs
+          ls -la dist || { echo "Missing dist output" >&2; exit 1; }
 
-          # Install and build the rn-sdk package
-          npm ci
-          npm run build
-
-          # Pack and capture the produced tarball filename reliably
-          tgz=$(npm pack --silent)
-          echo "Packed: $tgz"
-
-          # Debug listing
-          echo "rn-sdk directory listing:"
-          ls -la
-
-          # Copy the tgz into mobile-app so the subsequent npm ci in mobile-app can use it
-          cp "$tgz" ../mobile-app/ || { echo "Failed to copy $tgz to ../mobile-app/"; ls -la .. || true; exit 1; }
-          echo "Copied $tgz to ../mobile-app/"
-
-      - name: Install dependencies
+      - name: Install mobile-app dependencies
         run: |
           set -euo pipefail
 
@@ -63,17 +50,18 @@ jobs:
           npm cache clean --force || true
           npm cache verify || true
 
-          # Retry npm ci up to 3 times to handle transient errors
+          # Use npm install first because lockfile may need regeneration after folder dependency switch
+          # Retry up to 3 times to handle transient network issues
           n=0
           until [ "$n" -ge 3 ]
           do
-            npm ci && break
+            npm install && break
             n=$((n+1))
             echo "npm ci failed, retry $n/3..."
             sleep $((n*5))
           done
           if [ "$n" -ge 3 ]; then
-            echo "npm ci failed after 3 attempts" >&2
+            echo "npm install failed after 3 attempts" >&2
             exit 1
           fi
 
