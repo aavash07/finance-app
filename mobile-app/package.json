@@ -10,7 +10,7 @@
     "web": "expo start --web"
   },
   "dependencies": {
-    "@financekit/rn-sdk": "file:../rn-sdk/financekit-rn-sdk-0.1.0.tgz",
+    "@financekit/rn-sdk": "file:./financekit-rn-sdk-0.1.0.tgz",
     "@react-native-async-storage/async-storage": "^1.24.0",
     "@react-native-community/netinfo": "^11.3.1",
     "@react-navigation/bottom-tabs": "^6.6.1",

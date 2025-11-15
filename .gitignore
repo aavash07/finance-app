@@ -79,6 +79,7 @@ dist/
 # rn-sdk build artifacts
 rn-sdk/dist/
 rn-sdk/*.tgz
+mobile-app/*.tgz
 
 # Environment keys
 secrets/
