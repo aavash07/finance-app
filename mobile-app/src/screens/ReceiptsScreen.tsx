@@ -305,7 +305,7 @@ export default function ReceiptsScreen() {
   // Header chip similar to Analytics headerRight
   const HeaderRight = React.useCallback(() => {
     return (
-      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingRight: 12 }}>
         {isOnline === false && (
           <View style={styles.hdrChipOffline}>
             <Ionicons name="cloud-offline" size={14} color="#fff" />

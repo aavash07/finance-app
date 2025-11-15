@@ -675,10 +675,26 @@ class HealthView(APIView):
         user_receipts = None
         if request.user and request.user.is_authenticated:
             user_receipts = Receipt.objects.filter(user=request.user).count()
+        # OCR diagnostics (non-fatal). Safe to call even if tesseract missing; we suppress exceptions.
+        tesseract_path = None
+        tesseract_version = None
+        try:
+            import shutil, pytesseract
+            tesseract_path = shutil.which('tesseract')
+            try:
+                tesseract_version = str(pytesseract.get_tesseract_version())
+            except Exception:
+                tesseract_version = 'error'
+        except Exception:
+            tesseract_path = None
+            tesseract_version = None
         return Response({
             'engine': engine,
             'env': getattr(dj_settings, 'ENV_NAME', None),
             'is_prod': getattr(dj_settings, 'IS_PROD', None),
             'total_receipts': total_receipts,
             'user_receipts': user_receipts,
+            'tesseract_path': tesseract_path,
+            'tesseract_version': tesseract_version,
+            'ocr_ready': bool(tesseract_path and tesseract_version and tesseract_version != 'error'),
         })

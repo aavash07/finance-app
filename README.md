@@ -24,7 +24,7 @@ This backend powers a privacy-first finance app. Receipts are OCR'd on ingest an
 - Python 3.12+
 - PostgreSQL 15 (or update settings to SQLite for quick try)
 - Redis 7 (optional, recommended)
-- Tesseract OCR installed and on PATH. On Windows, install Tesseract and optionally set `TESSERACT_CMD` env var.
+- Tesseract OCR (system binary) + language data (at least English). The Python package `pytesseract` is only a wrapper; you MUST install the native engine (see "OCR Prerequisites" below).
 
 2) Install deps
 
@@ -69,6 +69,82 @@ make db-up
 ```powershell
 python manage.py runserver 0.0.0.0:8000
 ```
+
+## OCR Prerequisites
+
+The ingest pipeline uses `pytesseract` which calls the native Tesseract binary. If the binary or its language data is missing, OCR returns an empty string and receipts will show `Unknown` merchant and `USD 0` total.
+
+Install Tesseract for your environment BEFORE testing ingest:
+
+Windows:
+1. Download installer: https://github.com/UB-Mannheim/tesseract/wiki (choose the latest release).
+2. Run installer (ensure English language data selected).
+3. Add install dir (e.g. `C:\Program Files\Tesseract-OCR`) to PATH, or set env var `TESSERACT_CMD` to the full path of `tesseract.exe`.
+4. Restart shell / IDE.
+
+macOS (Homebrew):
+```bash
+brew install tesseract
+```
+
+Ubuntu / Debian:
+```bash
+sudo apt update
+sudo apt install -y tesseract-ocr libtesseract-dev libgl1 libglib2.0-0
+```
+
+Alpine (if building a custom image):
+```bash
+apk add --no-cache tesseract-ocr tesseract-ocr-data-eng
+```
+
+Docker (recommended for Azure or reproducible deploys):
+```Dockerfile
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+	libgl1 libglib2.0-0 libtesseract-dev tesseract-ocr \
+	&& rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY requirements.txt ./
+RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+COPY . .
+EXPOSE 8000
+CMD ["gunicorn", "capstone_backend.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "120"]
+```
+
+Verification (run after install):
+```bash
+which tesseract
+tesseract --version
+python -c "import pytesseract; print(pytesseract.get_tesseract_version())"
+```
+
+If any of those fail, ingestion will produce empty OCR output.
+
+Environment override (if binary not on PATH):
+```bash
+export TESSERACT_CMD=/usr/bin/tesseract
+```
+On Windows PowerShell:
+```powershell
+[Environment]::SetEnvironmentVariable('TESSERACT_CMD','C:\\Program Files\\Tesseract-OCR\\tesseract.exe','Machine')
+```
+
+## Azure Deployment Notes
+
+If deploying to Azure App Service (Linux) without a custom container, use a startup script or `Dockerfile` (via Web App for Containers) that installs the system packages listed above. Missing Tesseract will result in all receipts ingesting with `Unknown` merchant and zero totals.
+
+Example App Service startup command (Enable SSH / Bash first):
+```bash
+apt-get update && apt-get install -y tesseract-ocr libtesseract-dev libgl1 libglib2.0-0
+```
+For production, prefer a custom container image so dependencies are versioned and reproducible.
+
+Health check: enhance `/api/v1/health` or create a management command to log `pytesseract.get_tesseract_version()` at startup for observability.
+The `/api/v1/health` endpoint now returns `tesseract_path`, `tesseract_version`, and `ocr_ready` for quick diagnostics.
+
+## Quick dev flow
 
 ## Quick dev flow
 
