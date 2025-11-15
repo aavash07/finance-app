@@ -29,6 +29,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          npm cache clean --force
           npm ci
           npm i -g eas-cli@latest
 
