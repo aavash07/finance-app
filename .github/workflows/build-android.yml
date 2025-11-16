@@ -114,12 +114,21 @@ jobs:
           if [ ! -f credentials.json ]; then echo "credentials.json missing; generation step failed" >&2; exit 1; fi
           # Extra keystore integrity check before build
           keytool -list -keystore financekit-mobile.keystore -storepass "$EAS_BUILD_ANDROID_KEYSTORE_PASSWORD" | grep -i "Alias name" || echo "(Alias listing non-critical)"
-          eas build -p android --profile preview --non-interactive --clear-cache --wait
+          # Run build and save JSON result containing build id
+          eas build -p android --profile preview --non-interactive --clear-cache --wait --json | tee build.json
 
       - name: Download latest APK
         run: |
+          set -euo pipefail
           mkdir -p dist
-          eas build:download --platform android --latest --path dist/financekit-preview.apk
+          # Prefer the build id from the just-finished build
+          BUILD_ID=$(jq -r '.id // .builds[0].id // empty' build.json 2>/dev/null || true)
+          if [ -z "$BUILD_ID" ]; then
+            # Fallback to listing the most recent Android build
+            BUILD_ID=$(eas build:list --platform android --limit 1 --json | jq -r '.[0].id')
+          fi
+          echo "Downloading build $BUILD_ID ..."
+          eas build:download --build-id "$BUILD_ID" --platform android --output dist/financekit-preview.apk
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
