@@ -13,6 +13,9 @@ buildscript {
     repositories {
         google()
         mavenCentral()
+        maven {
+            url "https://releases.jfrog.io/artifactory/oss-releases"
+        }
     }
     dependencies {
         classpath('com.android.tools.build:gradle')
