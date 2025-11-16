@@ -121,11 +121,17 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          # Prefer the build id from the just-finished build
+          # Try to get build id from build.json
           BUILD_ID=$(jq -r '.id // .builds[0].id // empty' build.json 2>/dev/null || true)
           if [ -z "$BUILD_ID" ]; then
-            # Fallback to listing the most recent Android build
-            BUILD_ID=$(eas build:list --platform android --limit 1 --json | jq -r '.[0].id')
+            echo "[warn] build.json did not contain a build id. Trying to get latest build from EAS..."
+            OUT=$(eas build:list --platform android --limit 1 --json 2>&1)
+            echo "[debug] eas build:list output: $OUT"
+            BUILD_ID=$(echo "$OUT" | jq -r '.[0].id' 2>/dev/null || true)
+            if [ -z "$BUILD_ID" ]; then
+              echo "[error] Could not find a valid build id. Raw output: $OUT" >&2
+              exit 1
+            fi
           fi
           echo "Downloading build $BUILD_ID ..."
           eas build:download --build-id "$BUILD_ID" --platform android --output dist/financekit-preview.apk
