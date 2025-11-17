@@ -135,11 +135,15 @@ jobs:
           fi
           echo "Downloading build $BUILD_ID ..."
           # Removed incorrect flags. Only use the correct command below.
-          echo "Running EAS build and saving output to build-info.json..."
-          eas build --platform android --non-interactive --output build-info.json
-          echo "Extracting APK URL from EAS build output..."
-          BUILD_URL=$(cat build-info.json | jq -r '.[0].artifacts.buildUrl // .[0].artifacts.applicationArchiveUrl')
+          echo "Running EAS cloud build and extracting build ID..."
+          BUILD_INFO=$(eas build --platform android --profile preview --non-interactive --json)
+          BUILD_ID=$(echo "$BUILD_INFO" | jq -r '.[0].id // .id')
+          echo "Build ID: $BUILD_ID"
+          echo "Fetching build details from EAS..."
+          BUILD_DETAILS=$(eas build:list --json --limit 1 --platform android --status finished --id "$BUILD_ID")
+          BUILD_URL=$(echo "$BUILD_DETAILS" | jq -r '.[0].artifacts.buildUrl // .[0].artifacts.applicationArchiveUrl')
           echo "Downloading APK using curl from $BUILD_URL ..."
+          mkdir -p dist
           curl -L "$BUILD_URL" -o dist/financekit-preview.apk
             eas build:download -b "$BUILD_ID" -o dist/financekit-preview.apk
             # The above command uses the correct flags for build id and output path.
