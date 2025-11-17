@@ -135,6 +135,8 @@ jobs:
           fi
           echo "Downloading build $BUILD_ID ..."
           # Removed incorrect flags. Only use the correct command below.
+          echo "Printing EAS CLI build:download help output for debugging..."
+          eas build:download --help
           eas build:download -b "$BUILD_ID" -o dist/financekit-preview.apk
             eas build:download -b "$BUILD_ID" -o dist/financekit-preview.apk
             # The above command uses the correct flags for build id and output path.
