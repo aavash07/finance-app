@@ -135,8 +135,9 @@ jobs:
           fi
           echo "Downloading build $BUILD_ID ..."
           # Removed incorrect flags. Only use the correct command below.
+          echo "Running EAS build and saving output to build-info.json..."
+          eas build --platform android --non-interactive --output build-info.json
           echo "Extracting APK URL from EAS build output..."
-          # Parse buildUrl or applicationArchiveUrl from the EAS build output JSON
           BUILD_URL=$(cat build-info.json | jq -r '.[0].artifacts.buildUrl // .[0].artifacts.applicationArchiveUrl')
           echo "Downloading APK using curl from $BUILD_URL ..."
           curl -L "$BUILD_URL" -o dist/financekit-preview.apk
