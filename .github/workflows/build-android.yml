@@ -134,7 +134,8 @@ jobs:
             fi
           fi
           echo "Downloading build $BUILD_ID ..."
-          eas build:download --platform android --id "$BUILD_ID" --path dist/financekit-preview.apk
+          # Removed incorrect flags. Only use the correct command below.
+          eas build:download -b "$BUILD_ID" -o dist/financekit-preview.apk
             eas build:download -b "$BUILD_ID" -o dist/financekit-preview.apk
             # The above command uses the correct flags for build id and output path.
             # Ensure the command is executed correctly.
