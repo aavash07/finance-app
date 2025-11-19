@@ -1,12 +1,12 @@
 from django.contrib import admin
-from django.http import HttpResponse
 from django.urls import path, include
-from financekit.views import ReceiptListView, ReceiptDetailView
+from financekit.views import ReceiptListView, ReceiptDetailView, HealthView
 
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/v1/", include("financekit.api_urls")),
     path("api/v1/receipts", ReceiptListView.as_view()),
     path("api/v1/receipts/<int:pk>", ReceiptDetailView.as_view()),
-    path("health", lambda r: HttpResponse("ok")),
+    # Enhanced health endpoint (JSON incl. OCR + DB diagnostics)
+    path("health", HealthView.as_view()),
 ]

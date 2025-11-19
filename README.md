@@ -100,27 +100,13 @@ apk add --no-cache tesseract-ocr tesseract-ocr-data-eng
 
 Docker (recommended for Azure or reproducible deploys):
 ```Dockerfile
-FROM python:3.12-slim
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-RUN apt-get update && apt-get install -y --no-install-recommends \
-	libgl1 libglib2.0-0 libtesseract-dev tesseract-ocr \
-	&& rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
-COPY . .
-EXPOSE 8000
-CMD ["gunicorn", "capstone_backend.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "120"]
-```
-
 Verification (run after install):
 ```bash
 which tesseract
 tesseract --version
-python -c "import pytesseract; print(pytesseract.get_tesseract_version())"
-```
-
-If any of those fail, ingestion will produce empty OCR output.
 
 Environment override (if binary not on PATH):
 ```bash
@@ -182,9 +168,6 @@ Minimal tests are under `financekit/tests/`. Example e2e test asserts single-use
 - On Windows, ensure Tesseract is installed and `pytesseract` can find it. Set env `TESSERACT_CMD` if needed.
 - If using SQLite for quick try, update `DATABASES` in `settings.py` accordingly.
 
-### Cleaning generated files
-
-On Windows, you can purge caches and build artifacts with:
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts/clean.ps1
@@ -216,11 +199,7 @@ Running the backend inside WSL is recommended on Windows. Here’s a quick path:
 - pip and venv: `sudo apt update && sudo apt install -y python3-venv python3-pip`
 - Docker Desktop for Windows with WSL integration enabled (for Postgres/Redis via Docker Compose)
 
-2) Start Postgres and Redis (in the repo root inside WSL)
-
 ```bash
-docker compose up -d
-```
 
 This launches Postgres on 5432 and Redis on 6379. The defaults in `.env` and `settings.py` already point to these.
 
@@ -237,9 +216,6 @@ pip install -r requirements.txt
 
 Create `.env` (copy from `.env.example`) and ensure DB_ vars match docker-compose values. Then:
 
-```bash
-python manage.py migrate
-python manage.py createsuperuser
 ```
 
 5) Run the server
