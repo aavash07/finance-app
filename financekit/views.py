@@ -304,7 +304,7 @@ class IngestReceiptView(APIView):
 
             # 2) OCR
             try:
-                parsed = parse_image_to_json(img_bytes)
+                parsed = parse_image_to_json(img_bytes, user=request.user)
             except Exception as e:
                 return Response({"detail": f"parse_image_to_json failed: {e}", "trace": traceback.format_exc()}, status=500)
             if not isinstance(parsed, dict):
@@ -359,6 +359,14 @@ class IngestReceiptView(APIView):
                     tip_total=_to_cents(parsed_obj.get("tip_total", 0)),
                     body_nonce=nonce, body_ct=ct, body_tag=tag,
                 )
+                if merchant:
+                    from .models import MerchantHint
+                    from django.utils import timezone
+                    mh, created = MerchantHint.objects.get_or_create(user=request.user, merchant=merchant[:255], defaults={"count": 1})
+                    if not created:
+                        mh.count += 1
+                    mh.last_seen = timezone.now()
+                    mh.save()
                 # (Removed debug prints)
 
                 # optional: create items
@@ -698,3 +706,30 @@ class HealthView(APIView):
             'tesseract_version': tesseract_version,
             'ocr_ready': bool(tesseract_path and tesseract_version and tesseract_version != 'error'),
         })
+
+
+class MerchantHintView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        from .models import MerchantHint
+        qs = MerchantHint.objects.filter(user=request.user).order_by('-count', '-last_seen')[:100]
+        data = [
+            {
+                'merchant': h.merchant,
+                'count': h.count,
+                'last_seen': h.last_seen.isoformat(),
+            } for h in qs
+        ]
+        return Response({'hints': data})
+
+    def post(self, request):
+        from .models import MerchantHint
+        merchant = str(request.data.get('merchant', '')).strip()
+        if not merchant:
+            return Response({'detail': 'merchant required'}, status=400)
+        mh, created = MerchantHint.objects.get_or_create(user=request.user, merchant=merchant[:255], defaults={'count': 1})
+        if not created:
+            mh.count += 1
+            mh.save()
+        return Response({'merchant': mh.merchant, 'count': mh.count}, status=201)

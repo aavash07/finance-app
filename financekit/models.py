@@ -78,3 +78,22 @@ class AuditEvent(models.Model):
             models.Index(fields=["endpoint", "created_at"]),
         ]
         ordering = ["-created_at"]
+
+
+class MerchantHint(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    merchant = models.CharField(max_length=255)
+    count = models.IntegerField(default=0)
+    last_seen = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["user", "merchant"], name="uniq_user_merchant_hint")
+        ]
+        indexes = [
+            models.Index(fields=["user", "merchant"]),
+            models.Index(fields=["user", "last_seen"]),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id}:{self.merchant} ({self.count})"

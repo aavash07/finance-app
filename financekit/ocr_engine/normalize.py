@@ -216,9 +216,19 @@ def _itemize(text: str, cutoff_idx: int) -> List[Dict[str, Any]]:
 
     return items
 
-def normalize_text_to_schema(text: str) -> Dict[str, Any]:
-    # Merchant: emulate external detection (simple top lines + hints).
-    store_hints = {"walmart","ucb","target","amazon","costco","trader joe","trader joe's","trader","joes","joe's"}
+def normalize_text_to_schema(text: str, user=None) -> Dict[str, Any]:
+    # Merchant: simple top-lines + static + per-user dynamic hints.
+    static_hints = {"walmart","ucb","target","amazon","costco","trader joe","trader joe's","trader","joes","joe's"}
+    dynamic_hints: set[str] = set()
+    if user is not None:
+        try:
+            from financekit.models import MerchantHint  # late import to avoid heavy Django cost if unused
+            for mh in MerchantHint.objects.filter(user=user).order_by('-count')[:50]:
+                dynamic_hints.add(mh.merchant.lower())
+        except Exception:
+            # Swallow if DB or model unavailable in a non-Django context
+            pass
+    store_hints = static_hints | dynamic_hints
     lines = [ln.strip() for ln in (text or "").splitlines()]
     merchant = "Unknown"
     first_candidate = ""

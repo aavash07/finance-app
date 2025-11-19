@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Receipt, ReceiptItem
+from .models import Receipt, ReceiptItem, MerchantHint
 
 class DeviceRegisterSerializer(serializers.Serializer):
     device_id = serializers.CharField()
@@ -95,3 +95,9 @@ class RegisterSerializer(serializers.Serializer):
             password=validated_data["password"],
         )
         return user
+
+
+class MerchantHintSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MerchantHint
+        fields = ("merchant", "count", "last_seen")
