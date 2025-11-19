@@ -150,8 +150,24 @@ SIMPLE_JWT = {
 }
 
 # RSA key paths
-SERVER_RSA_PRIV_PATH = os.getenv("SERVER_RSA_PRIV_PATH")
-SERVER_RSA_PUB_PATH  = os.getenv("SERVER_RSA_PUB_PATH")
+def _normalize_secret_path(p: str | None):
+    if not p:
+        return None
+    # Expand relative paths under BASE_DIR
+    return str((BASE_DIR / p) if not os.path.isabs(p) else p)
+
+SERVER_RSA_PRIV_PATH = _normalize_secret_path(os.getenv("SERVER_RSA_PRIV_PATH"))
+SERVER_RSA_PUB_PATH  = _normalize_secret_path(os.getenv("SERVER_RSA_PUB_PATH"))
+
+# Fallback to bundled dummy dev keys if env vars absent and files exist.
+if not SERVER_RSA_PRIV_PATH:
+    _priv_candidate = BASE_DIR / "secrets" / "server_rsa_priv.pem"
+    if _priv_candidate.exists():
+        SERVER_RSA_PRIV_PATH = str(_priv_candidate)
+if not SERVER_RSA_PUB_PATH:
+    _pub_candidate = BASE_DIR / "secrets" / "server_rsa_pub.pem"
+    if _pub_candidate.exists():
+        SERVER_RSA_PUB_PATH = str(_pub_candidate)
 
 # Redis URL (optional for JTI single-use check)
 REDIS_URL = os.getenv("REDIS_URL")
