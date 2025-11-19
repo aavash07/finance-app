@@ -10,12 +10,20 @@ class ErrorEnvelopeTest(TestCase):
         self.c = APIClient()
 
     def test_auth_required_error_is_wrapped(self):
-        # No auth to a protected endpoint -> 401 with our envelope
-        r = self.c.get("/api/v1/crypto/server-public-key")
+        # No auth to a protected endpoint (receipts) -> 401 with our envelope
+        r = self.c.get("/api/v1/receipts")
         self.assertEqual(r.status_code, status.HTTP_401_UNAUTHORIZED)
         body = r.json()
         self.assertIn("code", body)
         self.assertIn("detail", body)
+
+    def test_public_key_endpoint_is_open(self):
+        # Public endpoint should be accessible without auth and return key fields
+        r = self.c.get("/api/v1/crypto/server-public-key")
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        body = r.json()
+        self.assertEqual(body.get("algorithm"), "RSA-OAEP-SHA256")
+        self.assertTrue(body.get("pem"))
 
 
 class ThrottleTest(TestCase):
