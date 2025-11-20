@@ -9,32 +9,11 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        ports: ["5432:5432"]
-        env:
-          POSTGRES_DB: capstone
-          POSTGRES_USER: capstone
-          POSTGRES_PASSWORD: capstone
-        options: >-
-          --health-cmd "pg_isready -U capstone -d capstone"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     env:
-      # Django settings
-      DB_NAME: capstone
-      DB_USER: capstone
-      DB_PASSWORD: capstone
-      DB_HOST: 127.0.0.1
-      DB_PORT: 5432
       DEBUG: "0"
       SECRET_KEY: dummy
-      # RSA keys used by tests
       SERVER_RSA_PRIV_PATH: secrets/server_rsa_priv.pem
       SERVER_RSA_PUB_PATH: secrets/server_rsa_pub.pem
-      # Disable dev endpoints in CI by default
       ALLOW_DEV_ENDPOINTS: "0"
 
     steps:
@@ -52,21 +31,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Wait for Postgres
-        run: |
-          python - << 'PY'
-          import time, os
-          import psycopg2
-          for i in range(30):
-              try:
-                  conn = psycopg2.connect(dbname=os.environ['DB_NAME'], user=os.environ['DB_USER'], password=os.environ['DB_PASSWORD'], host=os.environ['DB_HOST'], port=int(os.environ['DB_PORT']))
-                  conn.close()
-                  print('Postgres is ready')
-                  break
-              except Exception as e:
-                  print('Waiting for Postgres...', e)
-                  time.sleep(2)
-          PY
+      # SQLite requires no external service; migrations will create db file.
 
       - name: Run tests
         run: |

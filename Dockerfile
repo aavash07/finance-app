@@ -39,4 +39,4 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -fsS http://localho
 
 # Notes:
 # - For dev with live reload, mount the source and run `python manage.py runserver` instead.
-# - Set appropriate SECRET_KEY and DB_* env vars at runtime or bake an .env file.
+# - SQLite is default; no external Postgres/Redis containers required. See postgres_settings_example.py for optional Postgres config.

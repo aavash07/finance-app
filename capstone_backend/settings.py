@@ -56,31 +56,19 @@ TEMPLATES = [{
 
 WSGI_APPLICATION = "capstone_backend.wsgi.application"
 
-# Database config:
-# - In production: default to Postgres
-# - In development: default to SQLite (easy local setup)
-DB_ENGINE = os.getenv("DB_ENGINE", "postgresql" if IS_PROD else "sqlite").lower()
-if DB_ENGINE == "sqlite":
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            # Default to local file for dev; allow override to a writable path on Azure (e.g. /home/site/db.sqlite3)
-            "NAME": os.getenv("SQLITE_PATH", os.path.join(BASE_DIR, "db.sqlite3")),
-        }
+"""Database configuration
+Current default: SQLite for all environments (local + Azure).
+
+Historical Postgres configuration retained in `postgres_settings_example.py` for future adopters.
+Set `DB_ENGINE=postgresql` and import that file manually if migration back to Postgres is desired.
+"""
+DB_ENGINE = "sqlite"  # hard-coded (was env-based)
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": os.getenv("SQLITE_PATH", os.path.join(BASE_DIR, "db.sqlite3")),
     }
-else:
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": os.getenv("DB_NAME","capstone"),
-            "USER": os.getenv("DB_USER","capstone"),
-            "PASSWORD": os.getenv("DB_PASSWORD","capstone"),
-            "HOST": os.getenv("DB_HOST","localhost"),
-            "PORT": os.getenv("DB_PORT","5432"),
-            # SSL defaults: require in production, disable in dev; can be overridden via DB_SSLMODE
-            "OPTIONS": {"sslmode": os.getenv("DB_SSLMODE", "require" if IS_PROD else "disable")},
-        }
-    }
+}
 
 # Startup diagnostic (prints once) to confirm DB selection & paths
 try:
@@ -169,8 +157,8 @@ if not SERVER_RSA_PUB_PATH:
     if _pub_candidate.exists():
         SERVER_RSA_PUB_PATH = str(_pub_candidate)
 
-# Redis URL (optional for JTI single-use check)
-REDIS_URL = os.getenv("REDIS_URL")
+# Redis support removed (unused); keep placeholder for future re-introduction
+REDIS_URL = None
 
 # Dev endpoints toggle
 ALLOW_DEV_ENDPOINTS = bool(int(os.getenv("ALLOW_DEV_ENDPOINTS", "1" if DEBUG else "0")))

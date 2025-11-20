@@ -12,7 +12,6 @@ from django.db.models import Sum, Value
 from django.db.models.functions import Coalesce
 from django.db import transaction
 from django.conf import settings
-import redis as redislib
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import padding as asy_padding
 
@@ -39,9 +38,7 @@ from nacl.encoding import Base64Encoder
 from django.db import connection, transaction
 
 # Optional Redis for single-use JTI
-def redis_client():
-    url = getattr(settings, "REDIS_URL", None)
-    return redislib.from_url(url) if url else None
+# Redis client removed; single-use JTI now relies solely on DB fallback (GrantJTI table).
 
 class ServerPubKeyView(APIView):
     # Public access: clients can fetch server RSA public key before auth
@@ -160,20 +157,12 @@ class ProcessDecryptView(APIView):
             _audit("missing_jti", device_id=kid)
             raise ParseError("Missing jti")
 
-        r = redis_client()
-        if r:
-            # atomic set-if-not-exists with TTL ~180s
-            ok = r.set(name=f"grant:jti:{jti}", value="1", nx=True, ex=180)
-            if not ok:
-                from .exceptions import ReplayDetected
-                _audit("replay", device_id=kid, jti=jti)
-                raise ReplayDetected()
-        else:
-            if GrantJTI.objects.filter(jti=jti).exists():
-                from .exceptions import ReplayDetected
-                _audit("replay", device_id=kid, jti=jti)
-                raise ReplayDetected()
-            GrantJTI.objects.create(jti=jti, user=request.user, device_id=dev.device_id)
+        # Single-use JTI via DB only (was Redis + DB fallback)
+        if GrantJTI.objects.filter(jti=jti).exists():
+            from .exceptions import ReplayDetected
+            _audit("replay", device_id=kid, jti=jti)
+            raise ReplayDetected()
+        GrantJTI.objects.create(jti=jti, user=request.user, device_id=dev.device_id)
 
         # At this point, grant is valid and not a replay; do not apply manual limiter to avoid throttling valid flows.
 
@@ -279,17 +268,11 @@ class IngestReceiptView(APIView):
         jti = payload.get("jti")
         if not jti:
             raise ParseError("Missing jti")
-        r = redis_client()
-        if r:
-            ok = r.set(name=f"grant:jti:{jti}", value="1", nx=True, ex=180)
-            if not ok:
-                from .exceptions import ReplayDetected
-                raise ReplayDetected()
-        else:
-            if GrantJTI.objects.filter(jti=jti).exists():
-                from .exceptions import ReplayDetected
-                raise ReplayDetected()
-            GrantJTI.objects.create(jti=jti, user=request.user, device_id=dev.device_id)
+        # Single-use JTI check via DB (Redis removed)
+        if GrantJTI.objects.filter(jti=jti).exists():
+            from .exceptions import ReplayDetected
+            raise ReplayDetected()
+        GrantJTI.objects.create(jti=jti, user=request.user, device_id=dev.device_id)
 
         # Scope check
         scope = set(payload.get("scope") or [])
