@@ -287,7 +287,7 @@ class IngestReceiptView(APIView):
 
             # 2) OCR
             try:
-                parsed = parse_image_to_json(img_bytes, user=request.user)
+                parsed = parse_image_to_json(img_bytes)
             except Exception as e:
                 return Response({"detail": f"parse_image_to_json failed: {e}", "trace": traceback.format_exc()}, status=500)
             if not isinstance(parsed, dict):
