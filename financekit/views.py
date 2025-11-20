@@ -450,7 +450,7 @@ class ReceiptListView(generics.ListAPIView):
         # Debug logging removed.
         return qs.order_by("-created_at")
 
-class ReceiptDetailView(generics.RetrieveDestroyAPIView):
+class ReceiptDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = ReceiptSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -458,8 +458,10 @@ class ReceiptDetailView(generics.RetrieveDestroyAPIView):
         return Receipt.objects.filter(user=self.request.user)
 
     def perform_destroy(self, instance: Receipt):
-        # Cascade delete of items handled by FK; add any audit/event hooks here if needed.
         instance.delete()
+
+    # Rely on serializer update for rich editing (items + breakdown fields).
+    # DRF's partial update semantics apply automatically when HTTP PATCH used.
 
 
 class AnalyticsSpendView(APIView):

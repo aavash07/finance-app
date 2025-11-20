@@ -32,12 +32,13 @@ class IngestReceiptSerializer(serializers.Serializer):
     image = serializers.ImageField()
     
 class ReceiptItemSerializer(serializers.ModelSerializer):
+    id = serializers.IntegerField(required=False)  # allow omission for new items
     class Meta:
         model = ReceiptItem
         fields = ("id", "desc", "qty", "price")
 
 class ReceiptSerializer(serializers.ModelSerializer):
-    items = ReceiptItemSerializer(many=True, read_only=True)
+    items = ReceiptItemSerializer(many=True, required=False)
     class Meta:
         model = Receipt
         fields = (
@@ -45,6 +46,7 @@ class ReceiptSerializer(serializers.ModelSerializer):
             "merchant",
             "date_str",
             "currency",
+            "category",
             "total",
             "subtotal",
             "tax_total",
@@ -54,6 +56,43 @@ class ReceiptSerializer(serializers.ModelSerializer):
             "items",
             "created_at",
         )
+        read_only_fields = ("created_at",)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        has_items = bool(data.get("items"))
+        if not has_items:
+            ocr = getattr(instance, "ocr_json", {}) or {}
+            raw_items = list(ocr.get("items") or [])
+            norm = []
+            for it in raw_items:
+                desc = str((it.get("desc") or "")).strip()
+                if not desc:
+                    continue
+                qty = it.get("qty", 1)
+                price = it.get("price", 0)
+                norm.append({"id": None, "desc": desc, "qty": str(qty), "price": str(price)})
+            if norm:
+                data["items"] = norm
+        return data
+
+    def update(self, instance, validated_data):
+        items_data = validated_data.pop("items", None)
+        # Assign scalar fields
+        for field, value in validated_data.items():
+            setattr(instance, field, value)
+        instance.save()
+        if items_data is not None:
+            # Full replacement strategy for simplicity
+            instance.items.all().delete()
+            for it in items_data:
+                ReceiptItem.objects.create(
+                    receipt=instance,
+                    desc=str(it.get("desc", ""))[:512],
+                    qty=it.get("qty", 1) or 1,
+                    price=it.get("price", 0) or 0,
+                )
+        return instance
 
 
 class DevMintTokenSerializer(serializers.Serializer):
