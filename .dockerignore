@@ -1,0 +1,28 @@
+# Exclude mobile app frontend from backend image to speed builds
+mobile-app/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Node modules anywhere (safety)
+**/node_modules/
+
+# Test artifacts / coverage
+htmlcov/
+.coverage*
+pytest_cache/
+
+# Large data or temporary assets
+Data/
+
+# Git & VCS
+.git
+.gitignore
+
+
+# Dev tools not needed at runtime
+devtools/
+
+# Misc
+*.log

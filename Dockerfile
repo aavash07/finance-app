@@ -19,6 +19,8 @@ COPY . .
 
 # Entry script added early and permissions set while still root
 COPY entrypoint.sh /app/entrypoint.sh
+# Normalize line endings in case file was edited on Windows
+RUN sed -i 's/\r$//' /app/entrypoint.sh
 
 # Non-root user for runtime safety (set ownership + exec bit in one layer)
 RUN useradd --create-home appuser \
