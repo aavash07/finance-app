@@ -1,8 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState, useLayoutEffect, useCallback } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, Pressable, Animated, Easing, LayoutAnimation, Platform, UIManager, Modal, TouchableWithoutFeedback, SafeAreaView } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, Pressable, Animated, Easing, LayoutAnimation, Platform, UIManager, Modal, TouchableWithoutFeedback, SafeAreaView, Image, TextInput, ScrollView, NativeModules } from 'react-native';
+import PillButton from '../components/PillButton';
+// Native DateTimePicker removed due to RNCMaterialDatePicker crashes; using JS calendar.
 import { GestureHandlerRootView, Swipeable } from 'react-native-gesture-handler';
 import * as ImagePicker from 'expo-image-picker';
 import { FinanceKitClient, generateDEK, mintGrantJWT, rsaOaepWrapDek } from '@financekit/rn-sdk';
+import InlineCalendarPicker from '../components/InlineCalendarPicker';
 import { useAppState } from '../context/AppState';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -200,6 +203,135 @@ export default function ReceiptsScreen() {
   // Archived receipts (persisted UI state)
   const [archivedIds, setArchivedIds] = useState<Set<number>>(new Set());
   const [archivedOpen, setArchivedOpen] = useState(false);
+  // Ingest confirmation modal state
+  const [ingestConfirm, setIngestConfirm] = useState<{ id: number; merchant: string; total: number|string; currency: string; imageUri: string; date: string } | null>(null);
+  // Inline quick edit working copy
+  const [ingestEdit, setIngestEdit] = useState<{ merchant: string; total: string; currency: string; date: string; subtotal: string; tax_total: string; discount_total: string; fees_total: string; tip_total: string }>({ merchant: '', total: '', currency: 'USD', date: '', subtotal: '', tax_total: '', discount_total: '', fees_total: '', tip_total: '' });
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [calendarYear, setCalendarYear] = useState(() => new Date().getFullYear());
+  const [calendarMonth, setCalendarMonth] = useState(() => new Date().getMonth());
+  const [expandFull, setExpandFull] = useState(false);
+  // Items no longer carry per-line category (simplified classification to receipt-level only)
+  const [ingestItems, setIngestItems] = useState<{ id?: number; desc: string; qty: string; price: string }[]>([]);
+  const fetchedItemsRef = useRef(false);
+  // Determine if native picker is safely available (avoid RNCMaterialDatePicker crash on some Expo Android builds)
+  // Force JS calendar path (no native dependency)
+  useEffect(() => {
+    if (ingestConfirm) {
+      setIngestEdit({
+        merchant: ingestConfirm.merchant || '',
+        total: String(ingestConfirm.total ?? ''),
+        currency: ingestConfirm.currency || 'USD',
+        date: ingestConfirm.date || '',
+        subtotal: '', tax_total: '', discount_total: '', fees_total: '', tip_total: ''
+      });
+    }
+  }, [ingestConfirm]);
+
+  // ---------------- Refactor helpers (reduce cognitive complexity) ----------------
+  const buildPatchPayload = () => {
+    if (!ingestConfirm) return null;
+    const patch: any = {};
+    const putNumber = (val: string, key: string) => {
+      if (!val?.trim()) return;
+      const num = Number(val.trim());
+      if (Number.isFinite(num)) patch[key] = num;
+    };
+    if (ingestEdit.merchant.trim()) patch.merchant = ingestEdit.merchant.trim();
+    if (ingestEdit.currency.trim()) patch.currency = ingestEdit.currency.trim().toUpperCase();
+    putNumber(ingestEdit.total, 'total');
+    if (ingestEdit.date.trim()) patch.date_str = ingestEdit.date.trim();
+    if (expandFull) {
+      putNumber(ingestEdit.subtotal, 'subtotal');
+      putNumber(ingestEdit.tax_total, 'tax_total');
+      putNumber(ingestEdit.discount_total, 'discount_total');
+      putNumber(ingestEdit.fees_total, 'fees_total');
+      putNumber(ingestEdit.tip_total, 'tip_total');
+      if (ingestItems.length) {
+        patch.items = ingestItems.map(it => ({
+          id: it.id,
+          desc: it.desc.trim(),
+          qty: Number(it.qty) || 1,
+          price: Number(it.price) || 0,
+        })).filter(x => x.desc);
+      }
+    }
+    return patch;
+  };
+
+  const toggleExpandFull = () => {
+    setExpandFull(prev => {
+      const next = !prev;
+      if (next && !fetchedItemsRef.current) loadIngestItems();
+      return next;
+    });
+  };
+
+  const updateIngestItem = (index: number, patch: Partial<{ desc: string; qty: string; price: string }>) => {
+    setIngestItems(arr => arr.map((x,i) => i === index ? { ...x, ...patch } : x));
+  };
+
+  const quickSave = async () => {
+    if (!ingestConfirm) return;
+    try {
+      const id = ingestConfirm.id;
+      const patch = buildPatchPayload();
+      if (!patch || Object.keys(patch).length === 0) { Alert.alert('Nothing to save', 'Enter a value first'); return; }
+      const resp = await fetchWithAuth(`${baseUrl.replace(/\/$/, '')}/api/v1/receipts/${id}`, {
+        method: 'PATCH',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch)
+      });
+      const body = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw body;
+      try { await setReceiptData(id, body.data || body, body.derived || {}); } catch {}
+      setIngestConfirm(c => {
+        if (!c) return c;
+        return {
+          ...c,
+            merchant: patch.merchant ?? c.merchant,
+            total: patch.total ?? c.total,
+            currency: patch.currency ?? c.currency,
+        };
+      });
+      await load(true, { silent: true });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      // Navigate to detail after brief tick so modal state clears first
+      setTimeout(() => {
+        setIngestConfirm(null);
+        navigation.navigate('ReceiptDetail', { id });
+      }, 60);
+    } catch (e: any) {
+      Alert.alert('Save failed', e?.detail || e?.message || 'Failed to save changes');
+    }
+  };
+
+  const loadIngestItems = useCallback(async () => {
+    if (!ingestConfirm) return;
+    if (fetchedItemsRef.current) return;
+    try {
+      const r = await fetchWithAuth(`${baseUrl.replace(/\/$/, '')}/api/v1/receipts/${ingestConfirm.id}`, { headers: authHeaders });
+      const body = await r.json();
+      if (r.ok && body.items) {
+        const mapped = (body.items || []).map((it: any) => ({
+          id: it.id,
+          desc: String(it.desc || ''),
+          qty: String(it.qty ?? '1'),
+          price: String(it.price ?? '0'),
+        }));
+        if (mapped.length) setIngestItems(mapped);
+      } else if (body.ocr_json?.items) {
+        const mapped = (body.ocr_json.items || []).map((it: any) => ({
+          id: undefined,
+          desc: String(it.desc || ''),
+          qty: String(it.qty ?? '1'),
+          price: String(it.price ?? '0'),
+        }));
+        if (mapped.length) setIngestItems(mapped);
+      }
+    } catch {/* ignore */}
+    fetchedItemsRef.current = true;
+  }, [ingestConfirm, fetchWithAuth, baseUrl, authHeaders]);
   const ARCHIVE_KEY = `archived_receipt_ids_v1:${username}`;
   
   // Build list from local cache (offline-first)
@@ -222,14 +354,35 @@ export default function ReceiptsScreen() {
   }, [outboxDeletes]);
 
   // Load receipts; by default use cache; pass true to force server fetch
+  const mergeAndFilter = (serverList: Receipt[]) => {
+    const exclude = new Set(pendingRef.current.map(p => p.id));
+    if (serverList.length === 0) {
+      const cached = filterQueuedDeletes(buildFromCache());
+      return exclude.size ? cached.filter(r => !exclude.has(r.id)) : cached;
+    }
+    const map = new Map<number, Receipt>();
+    for (const r of serverList) map.set(Number(r.id), r);
+    for (const r of itemsRef.current || []) if (!map.has(Number(r.id))) map.set(Number(r.id), r);
+    let merged = Array.from(map.values());
+    merged = filterQueuedDeletes(merged);
+    return exclude.size ? merged.filter(r => !exclude.has(r.id)) : merged;
+  };
+
+  const persistServerPayloads = async (rawList: any[]) => {
+    try {
+      const tasks: Promise<any>[] = [];
+      for (const rec of rawList) if (rec && (rec.data || rec.derived)) tasks.push(setReceiptData?.(Number(rec.id), rec.data, rec.derived));
+      if (tasks.length) await Promise.allSettled(tasks);
+    } catch {/* ignore */}
+  };
+
   const load = async (forceRemote: boolean = false, opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
     try {
       if (!forceRemote) {
         const cached = filterQueuedDeletes(buildFromCache());
         const exclude = new Set(pendingRef.current.map(p => p.id));
-        const filtered = exclude.size ? cached.filter(r => !exclude.has(r.id)) : cached;
-        setItems(filtered);
+        setItems(exclude.size ? cached.filter(r => !exclude.has(r.id)) : cached);
         setFirstLoadComplete(true);
         return;
       }
@@ -246,33 +399,8 @@ export default function ReceiptsScreen() {
         purchased_at: rec?.derived?.date_str || rec?.data?.date || rec?.date_str || rec?.purchased_at,
         currency: rec?.derived?.currency || rec?.data?.currency || rec?.currency || 'USD'
       })) as Receipt[];
-      const exclude = new Set(pendingRef.current.map(p => p.id));
-      if (normalized.length === 0) {
-        const cached = filterQueuedDeletes(buildFromCache());
-        const filtered = exclude.size ? cached.filter(r => !exclude.has(r.id)) : cached;
-        setItems(filtered);
-      } else {
-        // Merge server-first list with any existing items (e.g., recently injected)
-        const map = new Map<number, Receipt>();
-        for (const r of normalized) { map.set(Number(r.id), r); }
-        for (const r of itemsRef.current || []) { if (!map.has(Number(r.id))) map.set(Number(r.id), r); }
-        let merged = Array.from(map.values());
-        merged = filterQueuedDeletes(merged);
-        merged = exclude.size ? merged.filter(r => !exclude.has(r.id)) : merged;
-        setItems(merged);
-      }
-      try {
-        // Only persist receipt data when server response actually includes plaintext/derived fields
-        const tasks: Promise<any>[] = [];
-        for (const rec of list) {
-          if (rec && (rec.data || rec.derived)) {
-            tasks.push(setReceiptData?.(Number(rec.id), rec.data, rec.derived));
-          }
-        }
-        if (tasks.length) {
-          await Promise.allSettled(tasks);
-        }
-      } catch {}
+      setItems(mergeAndFilter(normalized));
+      await persistServerPayloads(list);
       setFirstLoadComplete(true);
     } catch (e: any) {
       const cached = filterQueuedDeletes(buildFromCache());
@@ -359,25 +487,22 @@ export default function ReceiptsScreen() {
       } catch {
         await load(false);
       }
+      const processOutboxDeletes = async () => {
+        for (const rid of outboxDeletes || []) {
+          try {
+            const r = await fetchWithAuth(`${baseUrl.replace(/\/$/, '')}/api/v1/receipts/${rid}`, { method: 'DELETE', headers: authHeaders });
+            if (r.status === 204 || r.status === 200 || r.status === 404) await dequeueDelete(rid);
+          } catch { /* keep in outbox */ }
+        }
+      };
       unsub = NetInfo.addEventListener(s => {
         const prev = isOnline;
         const now = !!s.isConnected;
         setIsOnline(now);
         isOnlineRef.current = now;
         if (prev === false && now === true) {
-          // Came back online: silently refresh from server and update cache
           load(true, { silent: true });
-          // Process pending deletes outbox
-          (async () => {
-            for (const rid of outboxDeletes || []) {
-              try {
-                const r = await fetchWithAuth(`${baseUrl.replace(/\/$/, '')}/api/v1/receipts/${rid}`, { method: 'DELETE', headers: authHeaders });
-                if (r.status === 204 || r.status === 200 || r.status === 404) {
-                  await dequeueDelete(rid);
-                }
-              } catch { /* keep in outbox for next attempt */ }
-            }
-          })();
+          processOutboxDeletes();
         }
       });
     })();
@@ -557,7 +682,9 @@ export default function ReceiptsScreen() {
         const merch = resp?.derived?.merchant || resp?.data?.merchant || 'Receipt';
         const total = resp?.derived?.total || resp?.data?.total || '';
         const cur = resp?.derived?.currency || resp?.data?.currency || 'USD';
-        Alert.alert('Ingested', `#${resp.receipt_id} • ${merch}${total ? ' • ' + cur + ' ' + total : ''}`);
+        // Show modal instead of alert
+        const dateStr = String(resp?.derived?.date_str || resp?.data?.date || '').split('T')[0];
+        setIngestConfirm({ id: Number(resp.receipt_id), merchant: merch, total, currency: cur, imageUri: uri, date: dateStr });
         await setReceiptDekWrap(resp.receipt_id, dek_wrap_srv);
         await setReceiptData(resp.receipt_id, resp.data, resp.derived);
         // Show immediately by injecting the new item into UI
@@ -812,9 +939,148 @@ export default function ReceiptsScreen() {
         onLibrary={chooseFromLibrary}
       />
 
+      {/* Ingest confirmation modal */}
+      <Modal visible={!!ingestConfirm} animationType="fade" transparent onRequestClose={() => setIngestConfirm(null)}>
+        <View style={styles.modalBackdrop}>
+          {/* Separate backdrop hit layer to avoid closing on scroll inside sheet */}
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setIngestConfirm(null)} accessibilityLabel="Dismiss ingest modal" />
+          <SafeAreaView style={[styles.modalSheet, { height: '95%', maxHeight: '95%' }]}> 
+                {ingestConfirm && (
+                  <View style={{ flex: 1 }}>
+                    <View style={styles.modalHeader}>
+                      <Text style={styles.modalTitle}>Ingest Complete</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                        <PillButton title="Detail" accessibilityLabel="View receipt detail" onPress={() => { const id = ingestConfirm.id; navigation.navigate('ReceiptDetail', { id }); setIngestConfirm(null); }} color="#0f766e" />
+                        <Pressable onPress={() => setIngestConfirm(null)} accessibilityLabel="Close ingest confirmation">
+                          <Text style={styles.modalClose}>Close</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                    <View style={[styles.modalBody, { flex: 1 }]}> 
+                      <Text style={{ fontSize: 16, fontWeight: '600', marginBottom: 8 }}>#{ingestConfirm.id} • {ingestConfirm.merchant}</Text>
+                      <Text style={{ color: '#475569', marginBottom: 12 }}>Total: {ingestConfirm.currency} {String(ingestConfirm.total)}</Text>
+                      <View style={{ height: 260, borderWidth: StyleSheet.hairlineWidth, borderColor: '#e2e8f0', borderRadius: 12, overflow: 'hidden', backgroundColor: '#f8fafc', marginBottom: 16 }}>
+                        <Image source={{ uri: ingestConfirm.imageUri }} resizeMode="contain" style={{ width: '100%', height: '100%' }} />
+                      </View>
+                      {/* Inline quick edit form */}
+                      <ScrollView
+                        style={{ flex: 1 }}
+                        contentContainerStyle={{ paddingBottom: 24 }}
+                        keyboardShouldPersistTaps="handled"
+                        showsVerticalScrollIndicator={false}
+                        scrollEventThrottle={16}
+                      >
+                        <View style={styles.editorSection}>
+                          <View style={styles.editorHeaderRow}>
+                            <Text style={styles.editorSectionTitle}>Receipt Meta</Text>
+                            <Pressable onPress={toggleExpandFull} style={styles.editorToggleBtn}>
+                              <Text style={styles.editorToggleText}>{expandFull ? 'Collapse' : 'Expand Full'}</Text>
+                            </Pressable>
+                          </View>
+                          <View style={styles.fieldRow}> 
+                            <Text style={styles.fieldLabel}>Merchant</Text>
+                            <TextInput style={styles.inlineInput} placeholder="Merchant" value={ingestEdit.merchant} onChangeText={(t) => setIngestEdit(p => ({ ...p, merchant: t }))} />
+                          </View>
+                          <View style={styles.fieldInlineGroup}> 
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.fieldLabel}>Total</Text>
+                              <TextInput style={styles.inlineInput} placeholder="Total" keyboardType="decimal-pad" value={ingestEdit.total} onChangeText={(t) => setIngestEdit(p => ({ ...p, total: t }))} />
+                            </View>
+                            <View style={{ width: 100 }}>
+                              <Text style={styles.fieldLabel}>Currency</Text>
+                              <TextInput style={styles.inlineInput} placeholder="Cur" autoCapitalize="characters" value={ingestEdit.currency} onChangeText={(t) => setIngestEdit(p => ({ ...p, currency: t }))} />
+                            </View>
+                          </View>
+                          <View style={styles.fieldRow}> 
+                            <Text style={styles.fieldLabel}>Date</Text>
+                            <Pressable onPress={() => setShowDatePicker(s => !s)} style={[styles.inlineInput, { justifyContent: 'center' }]} accessibilityLabel="Toggle calendar">
+                              <Text style={{ color: ingestEdit.date ? '#0f172a' : '#94a3b8' }}>{ingestEdit.date || 'Select date'}</Text>
+                            </Pressable>
+                            {showDatePicker && (
+                              <View style={{ marginTop: 8 }}>
+                                <InlineCalendarPicker
+                                  value={ingestEdit.date}
+                                  year={calendarYear}
+                                  month={calendarMonth}
+                                  onNavigate={(y,m) => { setCalendarYear(y); setCalendarMonth(m); }}
+                                  onChange={(next) => { setIngestEdit(p => ({ ...p, date: next })); setShowDatePicker(false); }}
+                                />
+                              </View>
+                            )}
+                          </View>
+                        </View>
+                        {expandFull && (
+                          <View style={styles.editorSection}>
+                            <Text style={styles.editorSectionTitle}>Breakdown</Text>
+                            <View style={styles.fieldInlineGroup}> 
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.fieldLabel}>Subtotal</Text>
+                                <TextInput style={styles.inlineInput} placeholder="0.00" keyboardType="decimal-pad" value={ingestEdit.subtotal} onChangeText={(t) => setIngestEdit(p => ({ ...p, subtotal: t }))} />
+                              </View>
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.fieldLabel}>Tax</Text>
+                                <TextInput style={styles.inlineInput} placeholder="0.00" keyboardType="decimal-pad" value={ingestEdit.tax_total} onChangeText={(t) => setIngestEdit(p => ({ ...p, tax_total: t }))} />
+                              </View>
+                            </View>
+                            <View style={styles.fieldInlineGroup}> 
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.fieldLabel}>Discounts</Text>
+                                <TextInput style={styles.inlineInput} placeholder="0.00" keyboardType="decimal-pad" value={ingestEdit.discount_total} onChangeText={(t) => setIngestEdit(p => ({ ...p, discount_total: t }))} />
+                              </View>
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.fieldLabel}>Fees</Text>
+                                <TextInput style={styles.inlineInput} placeholder="0.00" keyboardType="decimal-pad" value={ingestEdit.fees_total} onChangeText={(t) => setIngestEdit(p => ({ ...p, fees_total: t }))} />
+                              </View>
+                            </View>
+                            <View style={styles.fieldRow}> 
+                              <Text style={styles.fieldLabel}>Tip</Text>
+                              <TextInput style={styles.inlineInput} placeholder="0.00" keyboardType="decimal-pad" value={ingestEdit.tip_total} onChangeText={(t) => setIngestEdit(p => ({ ...p, tip_total: t }))} />
+                            </View>
+                          </View>
+                        )}
+                        {expandFull && (
+                          <View style={styles.editorSection}>
+                            <Text style={styles.editorSectionTitle}>Items</Text>
+                                  {ingestItems.map((it, idx) => {
+                                const itemKey = it.id == null ? `tmp-${idx}` : String(it.id);
+                                return (
+                              <View key={itemKey} style={styles.itemEditBlock}> 
+                                <TextInput style={[styles.inlineInput, styles.itemDescInput]} placeholder="Description" value={it.desc} onChangeText={(t) => updateIngestItem(idx, { desc: t })} />
+                                <View style={styles.fieldInlineGroup}> 
+                                  <View style={{ flex: 1 }}>
+                                    <Text style={styles.fieldLabel}>Qty</Text>
+                                    <TextInput style={styles.inlineInput} placeholder="1" keyboardType="decimal-pad" value={it.qty} onChangeText={(t) => updateIngestItem(idx, { qty: t })} />
+                                  </View>
+                                  <View style={{ flex: 1 }}>
+                                    <Text style={styles.fieldLabel}>Price</Text>
+                                    <TextInput style={styles.inlineInput} placeholder="0.00" keyboardType="decimal-pad" value={it.price} onChangeText={(t) => updateIngestItem(idx, { price: t })} />
+                                  </View>
+                                </View>
+                              </View>
+                            );})}
+                            <PillButton
+                              title="Add Item"
+                              accessibilityLabel="Add item"
+                              onPress={() => setIngestItems(arr => [...arr, { desc: '', qty: '1', price: '0' }])}
+                              color="#4f46e5"
+                              style={{ marginTop: 8 }}
+                            />
+                          </View>
+                        )}
+                        <PillButton title="Save Changes" accessibilityLabel="Save inline edit" onPress={quickSave} color="#4f46e5" style={{ marginTop: 4 }} />
+                      </ScrollView>
+                      {/* Action buttons moved to header; bottom row removed for cleaner editor space */}
+                    </View>
+                  </View>
+                )}
+          </SafeAreaView>
+        </View>
+      </Modal>
+
       {/* Undo toast (show most recent pending deletion) */}
       {pending.length > 0 && (() => {
-        const last = pending[pending.length - 1];
+        const last = pending.at(-1);
+        if (!last) return null;
         const remaining = Math.max(0, UNDO_MS - Math.round((progressAnim as any)._value * UNDO_MS));
         const secondsLeft = Math.ceil(remaining / 1000);
         const widthInterpolate = progressAnim.interpolate({ inputRange: [0,1], outputRange: ['100%','0%'] });
@@ -856,9 +1122,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#4f46e5', height: 56, width: 56, borderRadius: 28,
     alignItems: 'center', justifyContent: 'center',
     shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 6, shadowOffset: { width: 0, height: 3 },
-    elevation: 4,
+    elevation: 8, zIndex: 100,
   },
-  fabStackWrap: { position: 'absolute', right: 20, bottom: 28, alignItems: 'center' },
+  fabStackWrap: { position: 'absolute', right: 20, bottom: 28, alignItems: 'center', zIndex: 100, pointerEvents: 'box-none' },
   fabSmallWrap: { position: 'absolute', right: 0, bottom: 0 },
   fabSmall: { height: 48, width: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center',
     shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 5, shadowOffset: { width: 0, height: 3 }, elevation: 3 },
@@ -876,7 +1142,7 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
   swipePillNeutral: { backgroundColor: '#64748b', height: 44, minWidth: 56, paddingHorizontal: 16, borderRadius: 999, justifyContent: 'center', alignItems: 'center', marginLeft: 12,
     shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
-  undoBar: { position: 'absolute', bottom: 0, left: 0, right: 0, paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#1f2937' },
+  undoBar: { position: 'absolute', bottom: 0, left: 0, right: 0, paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#1f2937', zIndex: 10 },
   undoContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
   undoText: { color: '#f1f5f9', flex: 1, marginRight: 12 },
   undoBtn: { paddingHorizontal: 12, paddingVertical: 6, backgroundColor: '#4f46e5', borderRadius: 4 },
@@ -891,4 +1157,35 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 18, fontWeight: '700' },
   modalClose: { color: '#4f46e5', fontWeight: '600' },
   modalBody: { padding: 16 },
+  confirmBtn: { flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  confirmBtnText: { color: '#fff', fontWeight: '600' },
+  inlineInput: { backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14 },
+  inlineSaveBtn: { backgroundColor: '#4f46e5', paddingVertical: 12, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  itemEditBlock: { borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, padding: 12, backgroundColor: '#f8fafc' },
+  removeItemBtn: { marginTop: 8, backgroundColor: '#ef4444', paddingVertical: 8, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  addItemBtn: { backgroundColor: '#0f766e', paddingVertical: 10, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  removeItemBtnText: { color: '#fff', fontWeight: '600' },
+  addItemBtnText: { color: '#fff', fontWeight: '600' },
+  editorSection: { marginBottom: 18, padding: 14, backgroundColor: '#ffffff', borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: '#e2e8f0',
+    shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
+  editorHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  editorSectionTitle: { fontSize: 15, fontWeight: '700', color: '#0f172a' },
+  editorToggleBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
+  editorToggleText: { color: '#4f46e5', fontWeight: '600' },
+  fieldRow: { marginBottom: 12 },
+  fieldInlineGroup: { flexDirection: 'row', gap: 12, marginBottom: 12 },
+  fieldLabel: { fontSize: 12, fontWeight: '600', color: '#475569', marginBottom: 4 },
+  editorSaveBtn: { marginTop: 4 },
+  editorSaveBtnText: { color: '#fff', fontWeight: '700' },
+  itemDescInput: { marginBottom: 10 },
+  hdrActionBtn: { paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#0f766e', borderRadius: 8 },
+  hdrActionBtnText: { color: '#ffffff', fontWeight: '600', fontSize: 13 },
+  hdrActionBtnClose: { paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#64748b', borderRadius: 8 },
+  hdrDetailBtnSmall: { paddingHorizontal: 10, paddingVertical: 6, backgroundColor: '#0f766e', borderRadius: 6 },
+  // Unified modal button styles
+  modalBtnPrimary: { backgroundColor: '#4f46e5', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  modalBtnSecondary: { backgroundColor: '#0f766e', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  modalBtnGhost: { paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8 },
+  modalBtnText: { color: '#ffffff', fontWeight: '600', fontSize: 14 },
+  modalBtnGhostText: { color: '#4f46e5', fontWeight: '600', fontSize: 14 },
 });

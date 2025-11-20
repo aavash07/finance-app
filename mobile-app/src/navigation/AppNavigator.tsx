@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import ReceiptDetailScreen from '../screens/ReceiptDetailScreen';
+import ReceiptEditScreen from '../screens/ReceiptEditScreen';
 import MainTabs from './MainTabs';
 import SignInScreen from '../screens/SignInScreen';
 import SignUpScreen from '../screens/SignUpScreen';
@@ -14,6 +15,7 @@ export type RootStackParamList = {
   Provisioning: { fresh?: boolean } | undefined;
   MainTabs: undefined;
   ReceiptDetail: { id: number };
+  ReceiptEdit: { id: number };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -46,6 +48,7 @@ export default function AppNavigator() {
         <Stack.Screen name="Provisioning" component={ProvisioningScreen} options={{ headerShown: false }} />
         <Stack.Screen name="MainTabs" component={MainTabs} options={{ headerShown: false }} />
         <Stack.Screen name="ReceiptDetail" component={ReceiptDetailScreen} options={{ title: 'Receipt' }} />
+        <Stack.Screen name="ReceiptEdit" component={ReceiptEditScreen} options={{ title: 'Edit Receipt' }} />
       </Stack.Navigator>
     </NavigationContainer>
   );

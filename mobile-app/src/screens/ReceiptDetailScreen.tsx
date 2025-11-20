@@ -32,6 +32,15 @@ export default function ReceiptDetailScreen({ route }: Readonly<Props>) {
   const processedAt = (body && (body as any).processed_at) || '';
   const str = (v: unknown) => (typeof v === 'string' ? v : '');
   const numStr = (v: unknown) => (typeof v === 'number' || typeof v === 'string' ? String(v) : '');
+  const fmtQty = (q: any) => {
+    if (q === null || q === undefined) return '';
+    const n = Number(q);
+    if (!Number.isFinite(n)) return String(q);
+    if (Math.abs(n - Math.round(n)) < 1e-9) return String(Math.round(n));
+    // Limit to 3 decimal places without trailing zeros
+    const s = n.toFixed(3);
+    return s.replace(/\.0+$/,'').replace(/(\.\d*[1-9])0+$/,'$1');
+  };
   const formatDateTime = (s: string) => {
     if (!s) { return ''; }
     const dt = new Date(s);
@@ -96,14 +105,17 @@ export default function ReceiptDetailScreen({ route }: Readonly<Props>) {
                 return (
                 <View key={stableKey} style={styles.itemRow}>
                   <Text style={styles.itemDesc}>{String(it.desc || it.name || '')}</Text>
-                  <Text style={styles.itemMeta}>x{String(it.qty ?? 1)}</Text>
+                  <Text style={styles.itemMeta}>x{fmtQty(it.qty ?? 1)}</Text>
                   <Text style={styles.itemPrice}>{String(it.price ?? '')}</Text>
                 </View>
               );})}
             </View>
           ) : null}
           <Text style={styles.meta}>Processed: {formatDateTime(processedAt)}</Text>
-          <View style={styles.deleteBtn}><PillButton title="Delete" color="#ef4444" onPress={onDelete} /></View>
+          <View style={styles.actionRow}>
+            <PillButton title="Edit" color="#3b82f6" onPress={() => navigation.navigate('ReceiptEdit', { id })} />
+            <PillButton title="Delete" color="#ef4444" onPress={onDelete} />
+          </View>
         </View>
       ) : (
         <Text>No local data for this receipt. Ingest from this device to cache it for offline viewing.</Text>
@@ -125,7 +137,7 @@ const styles = StyleSheet.create({
   itemDesc: { flex: 1, marginRight: 8 },
   itemMeta: { width: 40, textAlign: 'right', color: '#556' },
   itemPrice: { width: 80, textAlign: 'right' },
-  deleteBtn: { marginTop: 12 },
+  actionRow: { marginTop: 12, flexDirection: 'row', justifyContent: 'space-between' },
   undoWrap: { marginTop: 16, backgroundColor: '#1f2937', padding: 12, borderRadius: 6 },
   undoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
   undoText: { color: '#f1f5f9', flex: 1, marginRight: 12 },

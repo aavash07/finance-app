@@ -5,7 +5,12 @@ export type ApiError = { code: string; detail: string };
 export class FinanceKitClient {
   constructor(private readonly baseUrl: string, private readonly http: HttpClient = fetch) {}
 
-  private url(path: string) { return `${this.baseUrl.replace(/\/$/, '')}/api/v1/${path.replace(/^\//, '')}`; }
+  private url(path: string) {
+    if (!this.baseUrl) throw new Error('FinanceKitClient missing baseUrl');
+    const base = String(this.baseUrl).trim();
+    const p = String(path || '').trim();
+    return `${base.replace(/\/$/, '')}/api/v1/${p.replace(/^\//, '')}`;
+  }
 
   async getServerPublicKey(authHeaders?: Record<string, string>): Promise<{ algorithm: string; pem: string }> {
     const r = await this.http(this.url('crypto/server-public-key'), { headers: authHeaders });
@@ -66,6 +71,43 @@ export class FinanceKitClient {
     const body = await r.json();
     if (!r.ok) return body as ApiError;
     return body;
+  }
+
+  async updateReceipt(id: number, patch: {
+    merchant?: string; date_str?: string; category?: string; currency?: string;
+    total?: string | number; subtotal?: string | number; tax_total?: string | number;
+    discount_total?: string | number; fees_total?: string | number; tip_total?: string | number;
+    items?: Array<{ desc: string; qty?: string | number; price?: string | number }>
+  }, authHeaders?: Record<string, string>): Promise<any> {
+    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    if (authHeaders) Object.assign(headers, authHeaders);
+    const body: any = {};
+    const keys = ['merchant','date_str','category','currency','total','subtotal','tax_total','discount_total','fees_total','tip_total','items'];
+    for (const k of keys) if ((patch as any)[k] !== undefined) body[k] = (patch as any)[k];
+    const targetUrl = this.url(`receipts/${id}`);
+    try {
+      const r = await this.http(targetUrl, { method: 'PATCH', headers, body: JSON.stringify(body) });
+      let json: any = null;
+      try { json = await r.json(); } catch (e) { json = { code: 'parse_error', detail: 'Response parse failed', raw: String(e) }; }
+      if (!r.ok) {
+        throw (json || { code: 'http_error', detail: `HTTP ${r.status}` });
+      }
+      return json;
+    } catch (e: any) {
+      // Surface network-level errors with context
+      if (e?.detail || e?.code) throw e;
+      const err: any = new Error(`Network error while PATCH ${targetUrl}: ${e?.message || e}`);
+      err.code = 'network_error';
+      err.detail = `Request failed: ${e?.message || e}`;
+      err.url = targetUrl;
+      throw err;
+    }
+  }
+  async getReceipt(id: number, authHeaders?: Record<string,string>): Promise<any> {
+    const r = await this.http(this.url(`receipts/${id}`), { headers: authHeaders });
+    const j = await r.json();
+    if (!r.ok) throw j;
+    return j;
   }
 }
 export { mintGrantJWT, rsaOaepWrapDek } from './crypto';
