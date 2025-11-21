@@ -544,7 +544,7 @@ export default function AnalyticsScreen({ navigation }: any) {
 
   return (
     <View style={styles.container}>
-      <ScrollView ref={scrollRef} style={styles.screen} contentContainerStyle={styles.c}>
+      <ScrollView ref={scrollRef} style={styles.screen} contentContainerStyle={styles.c} keyboardShouldPersistTaps="always" keyboardDismissMode="on-drag">
       {/* Removed redundant inline page title and old alert pill */}
       <OverviewSection kpis={kpis} fmtAmount={fmtAmount} />
 
@@ -1041,7 +1041,7 @@ function FiltersModal({ visible, onClose, ...panelProps }: Readonly<FiltersModal
                   <Pressable onPress={onClose}><Text style={styles.modalClose}>Close</Text></Pressable>
                 </View>
               </View>
-              <ScrollView contentContainerStyle={styles.modalBody}>
+              <ScrollView contentContainerStyle={styles.modalBody} keyboardShouldPersistTaps="always" keyboardDismissMode="on-drag">
                 <FiltersPanel {...panelProps} />
               </ScrollView>
             </SafeAreaView>
