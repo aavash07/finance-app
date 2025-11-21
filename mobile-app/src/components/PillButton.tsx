@@ -14,7 +14,7 @@ type Props = {
 };
 
 export default function PillButton({ title, onPress, color = '#4f46e5', textColor = '#fff', disabled, loading, style, textStyle, accessibilityLabel }: Readonly<Props>) {
-  const bg = disabled ? '#9ca3af' : color;
+  const bg = disabled || loading ? '#9ca3af' : color;
   return (
     <Pressable
       accessibilityRole="button"

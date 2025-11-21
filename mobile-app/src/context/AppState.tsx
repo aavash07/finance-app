@@ -57,10 +57,13 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
   // - If EXPO_PUBLIC_BASE_URL is set, use it
   // - Else if EXPO_PUBLIC_USE_LOCAL=1 or in __DEV__ (no override), use localhost (10.0.2.2 on Android emulator)
   // - Else fall back to the Azure default URL
+  // Updated: use stable Azure deployment URL as default even in dev unless EXPO_PUBLIC_USE_LOCAL=1.
+  // The previous ephemeral regional URL is replaced with the canonical Web App host.
   const DEFAULT_AZURE_URL = process.env.EXPO_PUBLIC_DEFAULT_AZURE_URL || 'https://financekit-backend-byeud6e5hra6epf0.eastus-01.azurewebsites.net';
   const localUrl = Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://localhost:8000';
   const envBase = process.env.EXPO_PUBLIC_BASE_URL;
-  const preferLocal = (process.env.EXPO_PUBLIC_USE_LOCAL === '1') || (!!__DEV__ && !envBase);
+  // Only prefer local when explicitly requested via EXPO_PUBLIC_USE_LOCAL=1 (dev no longer auto-forces localhost)
+  const preferLocal = (process.env.EXPO_PUBLIC_USE_LOCAL === '1');
   const initialBase = envBase || (preferLocal ? localUrl : DEFAULT_AZURE_URL);
   const [baseUrl, setBaseUrl] = useState(initialBase);
   const [username, setUsername] = useState('tester');

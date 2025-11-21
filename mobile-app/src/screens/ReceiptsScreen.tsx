@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, useLayoutEffect, useCallback } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, Pressable, Animated, Easing, LayoutAnimation, Platform, UIManager, Modal, TouchableWithoutFeedback, SafeAreaView, Image, TextInput, ScrollView, NativeModules } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, Pressable, Animated, Easing, LayoutAnimation, Platform, UIManager, Modal, TouchableWithoutFeedback, SafeAreaView, Image, TextInput, ScrollView, NativeModules, ActivityIndicator } from 'react-native';
 import PillButton from '../components/PillButton';
 // Native DateTimePicker removed due to RNCMaterialDatePicker crashes; using JS calendar.
 import { GestureHandlerRootView, Swipeable } from 'react-native-gesture-handler';
@@ -16,7 +16,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { useFxRates } from '../hooks/useFxRates';
 
 // --- Local expandable FAB stack component ---
-function FabStack({ onCamera, onLibrary }: Readonly<{ onCamera: () => Promise<void> | void; onLibrary: () => Promise<void> | void }>) {
+function FabStack({ onCamera, onLibrary, loading }: Readonly<{ onCamera: () => Promise<void> | void; onLibrary: () => Promise<void> | void; loading?: boolean }>) {
   const [open, setOpen] = useState(false);
   const rot = useRef(new Animated.Value(0)).current; // 0 closed, 1 open
   const offset1 = useRef(new Animated.Value(0)).current; // for first action
@@ -50,10 +50,10 @@ function FabStack({ onCamera, onLibrary }: Readonly<{ onCamera: () => Promise<vo
       ]}> 
         <Pressable
           pointerEvents={open ? 'auto' : 'none'}
-          onPress={() => { setOpen(false); Animated.spring(rot, { toValue: 0, useNativeDriver: true }).start(); onLibrary?.(); }}
+          onPress={() => { if (loading) return; setOpen(false); Animated.spring(rot, { toValue: 0, useNativeDriver: true }).start(); onLibrary?.(); }}
           style={[styles.fabSmall, { backgroundColor: '#1f2937' }]} accessibilityLabel="Choose from photos"
         >
-          <Ionicons name="images" size={22} color="#fff" />
+          {loading ? <ActivityIndicator color="#fff" /> : <Ionicons name="images" size={22} color="#fff" />}
         </Pressable>
       </Animated.View>
       {/* Camera FAB */}
@@ -69,16 +69,16 @@ function FabStack({ onCamera, onLibrary }: Readonly<{ onCamera: () => Promise<vo
       ]}> 
         <Pressable
           pointerEvents={open ? 'auto' : 'none'}
-          onPress={() => { setOpen(false); Animated.spring(rot, { toValue: 0, useNativeDriver: true }).start(); onCamera?.(); }}
+          onPress={() => { if (loading) return; setOpen(false); Animated.spring(rot, { toValue: 0, useNativeDriver: true }).start(); onCamera?.(); }}
           style={[styles.fabSmall, { backgroundColor: '#0f766e' }]} accessibilityLabel="Open camera"
         >
-          <Ionicons name="camera" size={22} color="#fff" />
+          {loading ? <ActivityIndicator color="#fff" /> : <Ionicons name="camera" size={22} color="#fff" />}
         </Pressable>
       </Animated.View>
       {/* Main FAB */}
-      <Pressable accessibilityRole="button" accessibilityLabel="Add receipt" onPress={toggle} style={styles.fab}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Add receipt" onPress={() => { if (loading) return; toggle(); }} style={[styles.fab, loading && { backgroundColor: '#64748b' }] }>
         <Animated.View style={{ transform: [{ rotate }] }}>
-          <Ionicons name="add" size={28} color="#fff" />
+          {loading ? <ActivityIndicator color="#fff" /> : <Ionicons name="add" size={28} color="#fff" />}
         </Animated.View>
       </Pressable>
     </View>
@@ -271,9 +271,11 @@ export default function ReceiptsScreen() {
     setIngestItems(arr => arr.map((x,i) => i === index ? { ...x, ...patch } : x));
   };
 
+  const [saving, setSaving] = useState(false);
   const quickSave = async () => {
     if (!ingestConfirm) return;
     try {
+      setSaving(true);
       const id = ingestConfirm.id;
       const patch = buildPatchPayload();
       if (!patch || Object.keys(patch).length === 0) { Alert.alert('Nothing to save', 'Enter a value first'); return; }
@@ -303,7 +305,7 @@ export default function ReceiptsScreen() {
       }, 60);
     } catch (e: any) {
       Alert.alert('Save failed', e?.detail || e?.message || 'Failed to save changes');
-    }
+    } finally { setSaving(false); }
   };
 
   const loadIngestItems = useCallback(async () => {
@@ -667,9 +669,11 @@ export default function ReceiptsScreen() {
   };
 
   // Ingestion helpers (gallery & camera)
+  const [ingesting, setIngesting] = useState(false);
   const ingestImage = async (uri: string) => {
     if (!pem) { Alert.alert('Missing', 'Fetch server key in Device Setup first'); return; }
     try {
+      setIngesting(true);
       const image = { uri, name: 'receipt.jpg', type: 'image/jpeg' } as any;
       const dek = generateDEK(32);
       const dek_wrap_srv = rsaOaepWrapDek(pem, dek);
@@ -716,7 +720,7 @@ export default function ReceiptsScreen() {
       }
     } catch (e: any) {
       Alert.alert('Error', e?.detail || e?.message || 'Ingest failed');
-    }
+    } finally { setIngesting(false); }
   };
 
   const chooseFromLibrary = async () => {
@@ -934,10 +938,7 @@ export default function ReceiptsScreen() {
       </Modal>
 
       {/* Floating Action Buttons (Expandable) */}
-      <FabStack
-        onCamera={captureAndIngest}
-        onLibrary={chooseFromLibrary}
-      />
+      <FabStack onCamera={captureAndIngest} onLibrary={chooseFromLibrary} loading={ingesting} />
 
       {/* Ingest confirmation modal */}
       <Modal visible={!!ingestConfirm} animationType="fade" transparent onRequestClose={() => setIngestConfirm(null)}>
@@ -1067,7 +1068,7 @@ export default function ReceiptsScreen() {
                             />
                           </View>
                         )}
-                        <PillButton title="Save Changes" accessibilityLabel="Save inline edit" onPress={quickSave} color="#4f46e5" style={{ marginTop: 4 }} />
+                        <PillButton title={saving ? 'Saving…' : 'Save Changes'} accessibilityLabel="Save inline edit" onPress={quickSave} color="#4f46e5" style={{ marginTop: 4 }} loading={saving} disabled={saving} />
                       </ScrollView>
                       {/* Action buttons moved to header; bottom row removed for cleaner editor space */}
                     </View>
