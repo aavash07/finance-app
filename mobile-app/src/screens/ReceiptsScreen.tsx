@@ -204,9 +204,9 @@ export default function ReceiptsScreen() {
   const [archivedIds, setArchivedIds] = useState<Set<number>>(new Set());
   const [archivedOpen, setArchivedOpen] = useState(false);
   // Ingest confirmation modal state
-  const [ingestConfirm, setIngestConfirm] = useState<{ id: number; merchant: string; total: number|string; currency: string; imageUri: string; date: string } | null>(null);
+  const [ingestConfirm, setIngestConfirm] = useState<{ id: number; merchant: string; total: number|string; currency: string; imageUri: string; date: string; category: string } | null>(null);
   // Inline quick edit working copy
-  const [ingestEdit, setIngestEdit] = useState<{ merchant: string; total: string; currency: string; date: string; subtotal: string; tax_total: string; discount_total: string; fees_total: string; tip_total: string }>({ merchant: '', total: '', currency: 'USD', date: '', subtotal: '', tax_total: '', discount_total: '', fees_total: '', tip_total: '' });
+  const [ingestEdit, setIngestEdit] = useState<{ merchant: string; total: string; currency: string; date: string; category: string; subtotal: string; tax_total: string; discount_total: string; fees_total: string; tip_total: string }>({ merchant: '', total: '', currency: 'USD', date: '', category: 'Other', subtotal: '', tax_total: '', discount_total: '', fees_total: '', tip_total: '' });
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [calendarYear, setCalendarYear] = useState(() => new Date().getFullYear());
   const [calendarMonth, setCalendarMonth] = useState(() => new Date().getMonth());
@@ -223,10 +223,16 @@ export default function ReceiptsScreen() {
         total: String(ingestConfirm.total ?? ''),
         currency: ingestConfirm.currency || 'USD',
         date: ingestConfirm.date || '',
+        category: ingestConfirm.category || 'Other',
         subtotal: '', tax_total: '', discount_total: '', fees_total: '', tip_total: ''
       });
     }
   }, [ingestConfirm]);
+
+  // Static category options (can be server-driven later)
+  const CATEGORY_OPTIONS = useMemo(() => [
+    'Food', 'Groceries', 'Travel', 'Utilities', 'Shopping', 'Entertainment', 'Health', 'Other'
+  ], []); // 'Other' acts as fallback
 
   // ---------------- Refactor helpers (reduce cognitive complexity) ----------------
   const buildPatchPayload = () => {
@@ -239,6 +245,7 @@ export default function ReceiptsScreen() {
     };
     if (ingestEdit.merchant.trim()) patch.merchant = ingestEdit.merchant.trim();
     if (ingestEdit.currency.trim()) patch.currency = ingestEdit.currency.trim().toUpperCase();
+    if (ingestEdit.category?.trim()) patch.category = ingestEdit.category.trim();
     putNumber(ingestEdit.total, 'total');
     if (ingestEdit.date.trim()) patch.date_str = ingestEdit.date.trim();
     if (expandFull) {
@@ -294,6 +301,7 @@ export default function ReceiptsScreen() {
             merchant: patch.merchant ?? c.merchant,
             total: patch.total ?? c.total,
             currency: patch.currency ?? c.currency,
+            category: patch.category ?? c.category,
         };
       });
       await load(true, { silent: true });
@@ -436,6 +444,7 @@ export default function ReceiptsScreen() {
   const HeaderRight = React.useCallback(() => {
     return (
       <View style={{ flexDirection: 'row', alignItems: 'center', paddingRight: 12 }}>
+        {/* Category totals moved into Analytics screen; button removed */}
         {isOnline === false && (
           <View style={styles.hdrChipOffline}>
             <Ionicons name="cloud-offline" size={14} color="#fff" />
@@ -681,14 +690,15 @@ export default function ReceiptsScreen() {
       // Use a unique jti per ingest to avoid replay collisions (second-level timestamp can collide)
       const rand = Math.random().toString(36).slice(2);
       const token = await mintGrantJWT(deviceId, privB64, { sub: '1', scope: ['receipt:ingest'], jti: `${now}-${rand}`, iat: now, nbf: now - 5, exp: now + 180 });
-      const resp: any = await api.ingestReceipt({ token, dek_wrap_srv, year: new Date().getFullYear(), month: new Date().getMonth() + 1, category: 'Uncategorized', image, authHeaders });
+      const resp: any = await api.ingestReceipt({ token, dek_wrap_srv, year: new Date().getFullYear(), month: new Date().getMonth() + 1, category: 'Other', image, authHeaders });
       if (resp.receipt_id) {
         const merch = resp?.derived?.merchant || resp?.data?.merchant || 'Receipt';
         const total = resp?.derived?.total || resp?.data?.total || '';
         const cur = resp?.derived?.currency || resp?.data?.currency || 'USD';
         // Show modal instead of alert
         const dateStr = String(resp?.derived?.date_str || resp?.data?.date || '').split('T')[0];
-        setIngestConfirm({ id: Number(resp.receipt_id), merchant: merch, total, currency: cur, imageUri: uri, date: dateStr });
+        const cat = resp?.derived?.category || resp?.data?.category || 'Other';
+        setIngestConfirm({ id: Number(resp.receipt_id), merchant: merch, total, currency: cur, imageUri: uri, date: dateStr, category: cat });
         await setReceiptDekWrap(resp.receipt_id, dek_wrap_srv);
         await setReceiptData(resp.receipt_id, resp.data, resp.derived);
         // Show immediately by injecting the new item into UI
@@ -982,6 +992,24 @@ export default function ReceiptsScreen() {
                             <Text style={styles.fieldLabel}>Merchant</Text>
                             <TextInput style={styles.inlineInput} placeholder="Merchant" value={ingestEdit.merchant} onChangeText={(t) => setIngestEdit(p => ({ ...p, merchant: t }))} />
                           </View>
+                          <View style={styles.fieldRow}>
+                            <Text style={styles.fieldLabel}>Category</Text>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryScroll}>
+                              {CATEGORY_OPTIONS.map(cat => {
+                                const active = cat === ingestEdit.category;
+                                return (
+                                  <Pressable
+                                    key={cat}
+                                    onPress={() => setIngestEdit(p => ({ ...p, category: cat }))}
+                                    style={[styles.categoryChip, active && styles.categoryChipActive]}
+                                    accessibilityLabel={`Select category ${cat}`}
+                                  >
+                                    <Text style={[styles.categoryChipText, active && styles.categoryChipTextActive]}>{cat}</Text>
+                                  </Pressable>
+                                );
+                              })}
+                            </ScrollView>
+                          </View>
                           <View style={styles.fieldInlineGroup}> 
                             <View style={{ flex: 1 }}>
                               <Text style={styles.fieldLabel}>Total</Text>
@@ -1189,4 +1217,9 @@ const styles = StyleSheet.create({
   modalBtnGhost: { paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8 },
   modalBtnText: { color: '#ffffff', fontWeight: '600', fontSize: 14 },
   modalBtnGhostText: { color: '#4f46e5', fontWeight: '600', fontSize: 14 },
+  categoryScroll: { flexDirection: 'row', gap: 8, paddingVertical: 4 },
+  categoryChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#e2e8f0', marginRight: 8 },
+  categoryChipActive: { backgroundColor: '#4f46e5', borderColor: '#4f46e5' },
+  categoryChipText: { color: '#475569', fontSize: 12, fontWeight: '600' },
+  categoryChipTextActive: { color: '#ffffff' },
 });

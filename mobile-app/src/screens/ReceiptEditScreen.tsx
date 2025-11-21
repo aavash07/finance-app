@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, TextInput, StyleSheet, Alert, ScrollView, TouchableOpacity, Pressable } from 'react-native';
 import PillButton from '../components/PillButton';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -34,7 +34,10 @@ export default function ReceiptEditScreen({ route, navigation }: Props) {
     }
     return new Date().getMonth();
   });
-  const [category, setCategory] = useState(existing?.category || '');
+  const [category, setCategory] = useState(existing?.category || 'Other');
+  const CATEGORY_OPTIONS = useMemo(() => [
+    'Food','Groceries','Travel','Utilities','Shopping','Entertainment','Health','Other'
+  ], []);
   const [currency, setCurrency] = useState(existing?.currency || 'USD');
   const [total, setTotal] = useState(String(existing?.total || ''));
   const [subtotal, setSubtotal] = useState(String(existing?.subtotal || ''));
@@ -146,7 +149,24 @@ export default function ReceiptEditScreen({ route, navigation }: Props) {
           </View>
         )}
       </View>
-      <TextInput style={styles.input} placeholder="Category" value={category} onChangeText={setCategory} />
+      <View style={{ marginBottom: 12 }}>
+        <Text style={styles.fieldLabel}>Category</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryScroll}>
+          {CATEGORY_OPTIONS.map(cat => {
+            const active = cat === category;
+            return (
+              <Pressable
+                key={cat}
+                onPress={() => setCategory(cat)}
+                style={[styles.categoryChip, active && styles.categoryChipActive]}
+                accessibilityLabel={`Select category ${cat}`}
+              >
+                <Text style={[styles.categoryChipText, active && styles.categoryChipTextActive]}>{cat}</Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      </View>
       <View style={styles.row}> 
         <TextInput style={[styles.input, styles.currency]} placeholder="Currency" value={currency} onChangeText={setCurrency} />
         <TextInput style={[styles.input, styles.total]} placeholder="Total" value={total} onChangeText={setTotal} keyboardType="decimal-pad" />
@@ -235,4 +255,9 @@ const styles = StyleSheet.create({
   gridItem: { flex: 1, marginRight: 8 },
   fieldLabel: { fontSize: 12, fontWeight: '600', marginBottom: 4, color: '#6b7280' },
   emptyText: { fontStyle: 'italic', color: '#6b7280', marginBottom: 8 },
+  categoryScroll: { flexDirection: 'row', gap: 8 },
+  categoryChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#e2e8f0', marginRight: 8 },
+  categoryChipActive: { backgroundColor: '#4f46e5', borderColor: '#4f46e5' },
+  categoryChipText: { color: '#475569', fontSize: 12, fontWeight: '600' },
+  categoryChipTextActive: { color: '#ffffff' },
 });
