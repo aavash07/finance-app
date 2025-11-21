@@ -1,6 +1,7 @@
-import React, { useMemo, useState, useLayoutEffect, useCallback, useEffect } from 'react';
+import React, { useMemo, useState, useLayoutEffect, useCallback, useEffect, useRef } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
-import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, Modal, SafeAreaView, Alert, Share, TouchableWithoutFeedback } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, Modal, SafeAreaView, Alert, Share, TouchableWithoutFeedback, Platform } from 'react-native';
+import * as Notifications from 'expo-notifications';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
@@ -108,6 +109,8 @@ function Section({ title, children }: Readonly<React.PropsWithChildren<{ title: 
 export default function AnalyticsScreen({ navigation }: any) {
   const { receipts, budgets, setBudget } = useAppState();
   const baseList = useMemo(() => Object.values(receipts || {}), [receipts]);
+  // Independent month filter for category aggregation
+  const [categoryMonth, setCategoryMonth] = useState<string>('ALL');
 
   const currencies = useMemo(() => {
     const set = new Set<string>();
@@ -149,16 +152,39 @@ export default function AnalyticsScreen({ navigation }: any) {
   useFocusEffect(useCallback(() => { ensureFxRates(); }, [ensureFxRates]));
   // Removed collapsible inline filters; using FAB + modal instead
   const [filtersModalOpen, setFiltersModalOpen] = useState(false);
+  // Configure notification handler (foreground behavior)
+  useEffect(() => {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({ shouldShowAlert: true, shouldPlaySound: true, shouldSetBadge: false })
+    });
+  }, []);
+  // Android channel setup
+  useEffect(() => {
+    (async () => {
+      if (Platform.OS === 'android') {
+        try {
+          await Notifications.setNotificationChannelAsync('budget-alerts', {
+            name: 'Budget Alerts',
+            importance: Notifications.AndroidImportance.HIGH,
+            sound: 'default'
+          });
+        } catch {}
+      }
+    })();
+  }, []);
+  // Global preference moved to Account screen (context)
+  const { budgetAlertsEnabled, setBudgetAlertsEnabled } = useAppState() as any;
 
   const filtered = useMemo(() => filterReceipts(baseList, {
     dateFilter, currencyFilter, q, minAmt, maxAmt, onlyWithItems, archivedMode, archivedIds
   }), [baseList, dateFilter, currencyFilter, q, minAmt, maxAmt, onlyWithItems, archivedMode, archivedIds]);
 
-  const { kpis, byMonth, byMerchant, byCurrency, byCategory, csv } = useMemo(() => {
+  const { kpis, byMonth, byMerchant, byCurrency, byCategory, csv, categoryTotalAll } = useMemo(() => {
     const totals: number[] = [];
     const months: Record<string, number> = {};
     const merchants: Record<string, number> = {};
     const currencies: Record<string, number> = {};
+    // Receipt-level categories (simpler, explicit user selection)
     const categories: Record<string, number> = {};
     const shouldConvert = currencyFilter === 'ALL';
     const toUSD = fxToUSD || { USD: 1 };
@@ -184,25 +210,13 @@ export default function AnalyticsScreen({ navigation }: any) {
       // byCurrency keeps raw amounts per currency (no conversion)
       currencies[cur] = (currencies[cur] || 0) + totalRaw;
 
-      // Category rollup from items (exclude charges like tax/discount/fees/tip)
-      if (Array.isArray(d.items)) {
-        for (const it of d.items) {
-          const desc = safeStr(it?.desc) || safeStr(it?.name);
-          const low = desc.toLowerCase();
-          const isCharge = (
-            low.includes('subtotal') || low.includes('total') || low.includes('tax') || low.includes('vat') || low.includes('gst') ||
-            low.includes('discount') || low.includes('coupon') || low.includes('promo') || low.includes('promotion') || low.includes('savings') || low.includes('rebate') ||
-            low.includes('service charge') || low.includes('gratuity') || low.includes('tip') || low.includes('delivery') || low.includes('surcharge') || low.includes('fee') ||
-            low.includes('change')
-          );
-          if (isCharge) continue;
-          const qty = safeNum(it?.qty) || 1;
-          const price = safeNum(it?.price);
-          const amount = (qty * price) * conv;
-          const cat = categorize(desc);
-          categories[cat] = (categories[cat] || 0) + Math.max(0, amount);
-        }
+      // Use explicit receipt-level category (fallback 'Other') and apply month filter if active
+      const receiptCat = (safeStr(d.category) || 'Other').trim() || 'Other';
+      if (categoryMonth !== 'ALL') {
+        const mkForCat = mKey; // already computed above
+        if (mkForCat !== categoryMonth) continue; // skip if month doesn't match selected category month
       }
+      categories[receiptCat] = (categories[receiptCat] || 0) + total;
     }
 
     const count = totals.length;
@@ -227,8 +241,8 @@ export default function AnalyticsScreen({ navigation }: any) {
       .map(([k, v]) => ({ key: k, value: v }));
     const byCategory = Object.entries(categories)
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 8)
       .map(([k, v]) => ({ key: k, value: v }));
+    const categoryTotalAll = Object.values(categories).reduce((a,b)=>a+b,0);
 
     // CSV (basic): date,merchant,currency,total
     const rows = filtered.map((r: any) => {
@@ -241,25 +255,74 @@ export default function AnalyticsScreen({ navigation }: any) {
     });
     const csv = ['date,merchant,currency,total', ...rows].join('\n');
 
-    return { kpis, byMonth, byMerchant, byCurrency, byCategory, csv };
-  }, [filtered, currencyFilter, fxToUSD]);
+    return { kpis, byMonth, byMerchant, byCurrency, byCategory, csv, categoryTotalAll };
+  }, [filtered, currencyFilter, fxToUSD, categoryMonth]);
 
   
 
   const maxMonth = Math.max(1, ...byMonth.map(x => x.value));
   const maxMerchant = Math.max(1, ...byMerchant.map(x => x.value));
   const maxCategory = Math.max(1, ...byCategory.map(x => x.value));
-  const categoriesAll = useMemo(() => {
+  const categoryMonthsAvailable = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of filtered) {
+      const d: any = r?.data || r?.derived || {};
+      const dateStr = safeStr(d.date_str) || safeStr(d.date) || r.updatedAt || '';
+      const dt = new Date(dateStr);
+      if (!Number.isNaN(dt.getTime())) set.add(monthKey(dt));
+    }
+    return Array.from(set.values()).sort((a,b)=> b.localeCompare(a)); // newest first
+  }, [filtered]);
+  const fullCategoryList = useMemo(() => {
     const set = new Set<string>();
     for (const c of byCategory) set.add(c.key);
     for (const k of Object.keys(budgets || {})) set.add(k);
     for (const def of CATEGORY_KEYWORDS) set.add(def.key);
-    return Array.from(set.values()).sort((a, b) => a.localeCompare(b));
+    return Array.from(set.values()).sort((a,b)=> a.localeCompare(b));
   }, [byCategory, budgets]);
 
-  const overAlerts = useMemo(() => byCategory.filter(c => !!budgets[c.key] && c.value >= budgets[c.key]), [byCategory, budgets]);
-  const [alertsOpen, setAlertsOpen] = useState(false);
-  const [budgetModalOpen, setBudgetModalOpen] = useState(false);
+  const overAlerts = useMemo(() => byCategory.filter(c => {
+    const key = (c.key || '').trim();
+    const limit = budgets?.[key];
+    return typeof limit === 'number' && c.value >= limit;
+  }), [byCategory, budgets]);
+  // Fire a local notification (if enabled) when alerts are present
+  const notifiedRef = useRef<string>('');
+  useFocusEffect(useCallback(() => {
+    const alertsSig = `${overAlerts.map(a => a.key).join('|')}|${overAlerts.length}`;
+    const tryNotify = async () => {
+      if (!budgetAlertsEnabled) return;
+      if (!overAlerts.length) { notifiedRef.current = ''; return; }
+      if (notifiedRef.current === alertsSig) return;
+      try {
+        // Permissions (Android 13+ & iOS)
+        const perm = await Notifications.getPermissionsAsync();
+        if (perm.status !== 'granted') {
+          const req = await Notifications.requestPermissionsAsync();
+          if (req.status !== 'granted') return;
+        }
+        const count = overAlerts.length;
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: 'Budget Alert',
+            body: count === 1 ? `${overAlerts[0].key} is over its budget` : `${count} categories are over budget`,
+            sound: 'default',
+          },
+          trigger: null,
+        });
+        notifiedRef.current = alertsSig;
+      } catch (e) {
+        // Fallback to Alert if scheduling fails
+        try {
+          const count = overAlerts.length;
+          Alert.alert('Budget alert', count === 1 ? `${overAlerts[0].key} is over its budget` : `${count} categories are over budget`);
+          notifiedRef.current = alertsSig;
+        } catch {}
+      }
+    };
+    tryNotify();
+  }, [overAlerts, budgetAlertsEnabled]));
+  const [budgetEditorExpanded] = useState(true); // legacy flag (always expanded now)
   const [insightsModalOpen, setInsightsModalOpen] = useState(false);
 
   const fmtAmount = (n: number) => {
@@ -345,21 +408,39 @@ export default function AnalyticsScreen({ navigation }: any) {
     }
   };
 
-  // Navigation header chip
+  // Scroll refs for header alert pill jump
+  const scrollRef = useRef<ScrollView | null>(null);
+  const budgetsSectionYRef = useRef<number>(0);
+  // Navigation header content (filters + alert pill)
   const HeaderRight = useCallback(() => (
-    <ActiveFiltersSummary
-      dateFilter={dateFilter}
-      currencyFilter={currencyFilter}
-      q={q}
-      minAmt={minAmt}
-      maxAmt={maxAmt}
-      onlyWithItems={onlyWithItems}
-      archivedMode={archivedMode}
-      total={baseList.length}
-      filtered={filtered.length}
-      onOpen={() => setFiltersModalOpen(true)}
-    />
-  ), [dateFilter, currencyFilter, q, minAmt, maxAmt, onlyWithItems, archivedMode, baseList.length, filtered.length]);
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+      <ActiveFiltersSummary
+        dateFilter={dateFilter}
+        currencyFilter={currencyFilter}
+        q={q}
+        minAmt={minAmt}
+        maxAmt={maxAmt}
+        onlyWithItems={onlyWithItems}
+        archivedMode={archivedMode}
+        total={baseList.length}
+        filtered={filtered.length}
+        onOpen={() => setFiltersModalOpen(true)}
+      />
+      {overAlerts.length > 0 ? (
+        <Pressable
+          accessibilityLabel="Jump to budgets & alerts"
+          onPress={() => {
+            if (budgetsSectionYRef.current && scrollRef.current) {
+              scrollRef.current.scrollTo({ y: Math.max(budgetsSectionYRef.current - 12, 0), animated: true });
+            }
+          }}
+          style={[styles.pill, styles.pillActive]}
+        >
+          <Text style={[styles.pillText, styles.pillTextActive]}>Alerts: {overAlerts.length}</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  ), [dateFilter, currencyFilter, q, minAmt, maxAmt, onlyWithItems, archivedMode, baseList.length, filtered.length, overAlerts.length]);
 
   useLayoutEffect(() => {
     navigation?.setOptions?.({ headerTitle: 'Analytics', headerRight: HeaderRight });
@@ -367,11 +448,8 @@ export default function AnalyticsScreen({ navigation }: any) {
 
   return (
     <View style={styles.container}>
-      <ScrollView style={styles.screen} contentContainerStyle={styles.c}>
-        <Text style={styles.t}>Analytics</Text>
-
-      {/* Inline filters section removed (superseded by FAB + modal) */}
-
+      <ScrollView ref={scrollRef} style={styles.screen} contentContainerStyle={styles.c}>
+      {/* Removed redundant inline page title and old alert pill */}
       <OverviewSection kpis={kpis} fmtAmount={fmtAmount} />
 
       <MonthlySpendSection byMonth={byMonth} maxMonth={maxMonth} fmtAmount={fmtAmount} />
@@ -380,27 +458,30 @@ export default function AnalyticsScreen({ navigation }: any) {
 
       <ByCurrencySection byCurrency={byCurrency} fmtAmountIn={fmtAmountIn} />
 
-      <ByCategorySection byCategory={byCategory} maxCategory={maxCategory} budgets={budgets} fmtAmount={fmtAmount} />
-
-      <BudgetAlertsSection
-        overAlerts={overAlerts}
-        alertsOpen={alertsOpen}
-        setAlertsOpen={setAlertsOpen}
+      <ByCategorySection
+        byCategory={byCategory}
+        maxCategory={maxCategory}
+        totalAll={categoryTotalAll}
         budgets={budgets}
         fmtAmount={fmtAmount}
+        months={categoryMonthsAvailable}
+        activeMonth={categoryMonth}
+        onSelectMonth={setCategoryMonth}
       />
 
-      <Section title="Budgets (Monthly)">
-        <Pressable onPress={() => setBudgetModalOpen(true)} style={styles.collapseHeader}>
-          <Text style={styles.collapseText}>Open budget editor ({Object.keys(budgets || {}).length})</Text>
-        </Pressable>
-      </Section>
-      <BudgetsEditorModal
-        visible={budgetModalOpen}
-        onClose={() => setBudgetModalOpen(false)}
-        categoriesAll={categoriesAll}
+      <BudgetsAndAlertsSection
+        byCategory={byCategory}
+        fullCategoryList={fullCategoryList}
+        maxCategory={maxCategory}
+        totalAll={categoryTotalAll}
         budgets={budgets}
         setBudget={setBudget}
+        fmtAmount={fmtAmount}
+        overAlerts={overAlerts}
+        budgetAlertsEnabled={budgetAlertsEnabled}
+        navigation={navigation}
+        setBudgetAlertsEnabled={setBudgetAlertsEnabled}
+        onLayoutCapture={(y:number)=> { budgetsSectionYRef.current = y; }}
       />
 
       <Section title="Export">
@@ -515,79 +596,92 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 6, shadowOffset: { width: 0, height: 3 }, elevation: 6 },
 });
 
-type SetBudgetFn = (category: string, amount: number | null) => Promise<void> | void;
-
-type BudgetsEditorModalProps = {
-  visible: boolean;
-  onClose: () => void;
-  categoriesAll: string[];
+// Combined Budgets & Alerts inline section
+type BudgetsAndAlertsSectionProps = {
+  byCategory: { key: string; value: number }[];
+  fullCategoryList: string[];
+  maxCategory: number;
+  totalAll: number;
   budgets: Record<string, number>;
-  setBudget: SetBudgetFn;
+  setBudget: (cat: string, amount: number | null) => void | Promise<void>;
+  fmtAmount: (n: number) => string;
+  overAlerts: { key: string; value: number }[];
+  budgetAlertsEnabled: boolean;
+  navigation: any;
+  onLayoutCapture: (y: number) => void;
 };
-
-function BudgetsEditorModal({ visible, onClose, categoriesAll, budgets, setBudget }: Readonly<BudgetsEditorModalProps>) {
-  const count = Object.keys(budgets || {}).length;
+function BudgetsAndAlertsSection({ byCategory, fullCategoryList, maxCategory, totalAll, budgets, setBudget, fmtAmount, overAlerts, budgetAlertsEnabled, navigation, onLayoutCapture }: Readonly<BudgetsAndAlertsSectionProps>) {
+  const countBudgets = Object.keys(budgets || {}).length;
   const onClearAll = () => {
-    if (!count) return;
-    Alert.alert(
-      'Clear all budgets',
-      'This will remove all category budget limits.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Clear All', style: 'destructive',
-          onPress: () => {
-            for (const k of Object.keys(budgets || {})) {
-              setBudget(k, null);
-            }
-          }
-        }
-      ]
-    );
+    if (!countBudgets) return;
+    Alert.alert('Clear all budgets', 'Remove all category limits?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Clear', style: 'destructive', onPress: () => { for (const k of Object.keys(budgets || {})) setBudget(k, null); } }
+    ]);
   };
+  // Map for quick spend lookup
+  const spendMap: Record<string, number> = {};
+  for (const c of byCategory) spendMap[c.key] = c.value;
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <TouchableWithoutFeedback onPress={onClose}>
-        <View style={styles.modalBackdrop}>
-          <TouchableWithoutFeedback>
-            <SafeAreaView style={styles.modalSheet}>
-              <View style={styles.modalHeader}>
-          <Text style={styles.modalTitle}>Budgets (Monthly)</Text>
-          <View style={{ flexDirection: 'row', gap: 16 }}>
-            <Pressable onPress={onClearAll} disabled={count === 0}>
-              <Text style={[styles.modalClose, { color: count ? '#ef4444' : '#94a3b8' }]}>Clear All</Text>
-            </Pressable>
-            <Pressable onPress={onClose}>
-              <Text style={styles.modalClose}>Close</Text>
-            </Pressable>
-          </View>
-              </View>
-              <ScrollView contentContainerStyle={styles.modalBody}>
-          <Text style={styles.smallNote}>Set a monthly limit per category. Leave blank or 0 to remove.</Text>
-          {categoriesAll.map(cat => (
-            <View key={cat} style={styles.rowBare}>
-              <Text style={styles.rowLabel} numberOfLines={1}>{cat}</Text>
-              <TextInput
-                placeholder="Amount"
-                keyboardType="numeric"
-                value={budgets[cat] ? String(budgets[cat]) : ''}
-                onChangeText={(txt) => {
-                  const v = txt.trim();
-                  const n = v ? Number.parseFloat(v) : Number.NaN;
-                  if (!v) { setBudget(cat, null); return; }
-                  if (Number.isNaN(n)) return; // ignore invalid
-                  setBudget(cat, n);
-                }}
-                style={[styles.input, styles.inputSmall]}
-              />
-            </View>
-          ))}
-              </ScrollView>
-            </SafeAreaView>
-          </TouchableWithoutFeedback>
+    <View style={styles.section} onLayout={(e)=> onLayoutCapture(e.nativeEvent.layout.y)}>
+      <View style={styles.sectionBox}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <Text style={styles.sectionTitle}>Budgets & Alerts</Text>
+          <Pressable onPress={() => navigation?.navigate?.('AccountTab')} style={[styles.pill, budgetAlertsEnabled && styles.pillActive]} accessibilityLabel="Manage notification preference in Account settings">
+            <Text style={[styles.pillText, budgetAlertsEnabled && styles.pillTextActive]}>{budgetAlertsEnabled ? 'Notifications: On' : 'Notifications: Off'}</Text>
+          </Pressable>
         </View>
-      </TouchableWithoutFeedback>
-    </Modal>
+        <View style={{ marginBottom: 8 }}>
+          <Pressable onPress={onClearAll} disabled={countBudgets === 0} style={[styles.pill, styles.pillInline, countBudgets === 0 && { opacity: 0.4 }]}>
+            <Text style={styles.pillText}>Clear All</Text>
+          </Pressable>
+          {overAlerts.length > 0 ? (
+            <View style={{ marginTop: 8 }}>
+              <Text style={[styles.alertText, { fontWeight: '600' }]}>Over Budget ({overAlerts.length}):</Text>
+              {overAlerts.map(c => (
+                <Text key={c.key} style={styles.alertAmt}>{c.key}: {fmtAmount(c.value)} / {fmtAmount(budgets[c.key])}</Text>
+              ))}
+            </View>
+          ) : (
+            <Text style={{ marginTop: 8, color: '#64748b' }}>No categories over budget.</Text>
+          )}
+        </View>
+        {fullCategoryList.length === 0 ? <Text style={styles.empty}>No categories</Text> : fullCategoryList.map(cat => {
+          const spend = spendMap[cat] || 0;
+            const limit = budgets[cat];
+            let color: string | undefined;
+            if (limit) {
+              const ratio = spend / limit;
+              if (ratio >= 1) color = '#ef4444'; else if (ratio >= 0.8) color = '#f59e0b'; else color = '#10b981';
+            }
+            return (
+              <View key={cat} style={[styles.row, { alignItems: 'center' }]}>
+                <Text style={styles.rowLabel} numberOfLines={1}>{cat}</Text>
+                <View style={styles.rowBarWrap}>
+                  <Bar pct={maxCategory ? (spend / maxCategory) * 100 : 0} color={color} />
+                </View>
+                <View style={{ width: 130 }}>
+                  <Text style={styles.rowVal}>{fmtAmount(spend)}{totalAll > 0 && spend > 0 ? ` (${((spend/totalAll)*100).toFixed(1)}%)` : ''}</Text>
+                  {limit ? <Text style={{ fontSize: 11, color: color || '#334' }}>{fmtAmount(limit)} limit</Text> : null}
+                </View>
+                <TextInput
+                  placeholder={limit ? 'Edit' : 'Set'}
+                  keyboardType="numeric"
+                  value={limit ? String(limit) : ''}
+                  onChangeText={(txt) => {
+                    const v = txt.trim();
+                    if (!v) { setBudget(cat, null); return; }
+                    const n = Number.parseFloat(v);
+                    if (Number.isNaN(n)) return;
+                    setBudget(cat, n);
+                  }}
+                  style={[styles.inputSmall, { backgroundColor: '#fff', borderWidth: StyleSheet.hairlineWidth, borderColor: '#cbd5e1', paddingHorizontal: 8, paddingVertical: 6, borderRadius: 6, minWidth: 70 }]}
+                />
+              </View>
+            );
+        })}
+      </View>
+    </View>
   );
 }
 
@@ -903,9 +997,24 @@ function ByCurrencySection({ byCurrency, fmtAmountIn }: Readonly<{ byCurrency: B
   );
 }
 
-function ByCategorySection({ byCategory, maxCategory, budgets, fmtAmount }: Readonly<{ byCategory: ByKV; maxCategory: number; budgets: Record<string, number>; fmtAmount: (n:number)=>string }>) {
+function ByCategorySection({ byCategory, maxCategory, totalAll, budgets, fmtAmount, months, activeMonth, onSelectMonth }: Readonly<{ byCategory: ByKV; maxCategory: number; totalAll: number; budgets: Record<string, number>; fmtAmount: (n:number)=>string; months: string[]; activeMonth: string; onSelectMonth: (m: string) => void }>) {
   return (
     <Section title="By Category (Top)">
+      {/* Month filter embedded inside category section */}
+      {months.length > 0 ? (
+        <View style={{ marginBottom: 8 }}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Pressable onPress={() => onSelectMonth('ALL')} style={[styles.pill, activeMonth === 'ALL' && styles.pillActive]}>
+              <Text style={[styles.pillText, activeMonth === 'ALL' && styles.pillTextActive]}>All Months</Text>
+            </Pressable>
+            {months.map(m => (
+              <Pressable key={m} onPress={() => onSelectMonth(m)} style={[styles.pill, activeMonth === m && styles.pillActive]}>
+                <Text style={[styles.pillText, activeMonth === m && styles.pillTextActive]}>{m}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
       {byCategory.length === 0 ? <Text style={styles.empty}>No data yet</Text> : byCategory.map(c => (
         <View key={c.key} style={styles.row}>
           <Text style={styles.rowLabel} numberOfLines={1}>{c.key}</Text>
@@ -919,12 +1028,14 @@ function ByCategorySection({ byCategory, maxCategory, budgets, fmtAmount }: Read
               return <Bar pct={(c.value / maxCategory) * 100} color={color} />;
             })()}
           </View>
-          <Text style={styles.rowVal}>{fmtAmount(c.value)}</Text>
+          <Text style={styles.rowVal}>{fmtAmount(c.value)}{totalAll > 0 ? ` (${((c.value/totalAll)*100).toFixed(1)}%)` : ''}</Text>
         </View>
       ))}
     </Section>
   );
 }
+
+// inlined month filter now part of ByCategorySection
 
 // Extracted overview section component
 function OverviewSection({ kpis, fmtAmount }: Readonly<{ kpis: Metric[]; fmtAmount: (n:number)=>string }>) {
@@ -942,33 +1053,4 @@ function OverviewSection({ kpis, fmtAmount }: Readonly<{ kpis: Metric[]; fmtAmou
   );
 }
 
-type BudgetAlertsSectionProps = {
-  overAlerts: { key: string; value: number }[];
-  alertsOpen: boolean;
-  setAlertsOpen: (v: boolean | ((prev: boolean) => boolean)) => void;
-  budgets: Record<string, number>;
-  fmtAmount: (n:number)=>string;
-};
-function BudgetAlertsSection({ overAlerts, alertsOpen, setAlertsOpen, budgets, fmtAmount }: Readonly<BudgetAlertsSectionProps>) {
-  return (
-    <Section title="Budget Alerts">
-      <Pressable onPress={() => setAlertsOpen(v => !v)} style={styles.collapseHeader}>
-        <Text style={styles.collapseText}>{alertsOpen ? 'Hide' : 'Show'} alerts ({overAlerts.length})</Text>
-      </Pressable>
-      {alertsOpen ? (
-        <View style={styles.alertsList}>
-          {overAlerts.length === 0 ? (
-            <Text style={styles.empty}>No categories over budget</Text>
-          ) : (
-            overAlerts.map(c => (
-              <View key={c.key} style={styles.alertRow}>
-                <Text style={styles.alertText}>Over: {c.key}</Text>
-                <Text style={styles.alertAmt}>{fmtAmount(c.value)} / {fmtAmount(budgets[c.key])}</Text>
-              </View>
-            ))
-          )}
-        </View>
-      ) : null}
-    </Section>
-  );
-}
+// (Deprecated) BudgetAlertsSection replaced by BudgetsAndAlertsSection
