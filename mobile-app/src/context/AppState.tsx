@@ -36,6 +36,9 @@ type AppState = {
   queueDelete: (id: number) => Promise<void>;
   dequeueDelete: (id: number) => Promise<void>;
   hydrated: boolean; // initial secure store / async storage load complete
+  // Global preference: native notifications for budget alerts
+  budgetAlertsEnabled: boolean;
+  setBudgetAlertsEnabled: (v: boolean) => Promise<void> | void;
 };
 
 const Ctx = createContext<AppState | undefined>(undefined);
@@ -81,6 +84,7 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
   const [outboxDeletes, setOutboxDeletes] = useState<number[]>([]);
   const [onAuthFailure, setOnAuthFailure] = useState<(() => void) | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const [budgetAlertsEnabled, setBudgetAlertsEnabled] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -149,6 +153,13 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
       if (aReceipts) { try { setReceipts(JSON.parse(aReceipts)); } catch {} }
       if (aBudgets) { try { setBudgets(JSON.parse(aBudgets) || {}); } catch {} }
       if (aOutDel) { try { setOutboxDeletes((JSON.parse(aOutDel) || []).map(Number).filter((n: number)=>Number.isFinite(n))); } catch {} }
+      // Load budget alerts preference (user-scoped; fallback to legacy global key)
+      try {
+        const scopedPref = await AsyncStorage.getItem(`notify_budget_alerts:${u}`);
+        const legacyPref = scopedPref == null ? await AsyncStorage.getItem('notify_budget_alerts') : null;
+        const raw = scopedPref ?? legacyPref;
+        if (raw === '1') setBudgetAlertsEnabled(true);
+      } catch {}
       // Proactive access token refresh if expired and refresh token present
       const needsRefresh = (() => {
         if (!sAccess) return false;
@@ -323,6 +334,16 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
     });
   };
 
+  const markBudgetAlertsEnabled = async (v: boolean) => {
+    setBudgetAlertsEnabled(v);
+    const u = username || '__anon__';
+    try {
+      await AsyncStorage.setItem(`notify_budget_alerts:${u}`, v ? '1' : '0');
+      // Keep legacy key updated for backward compatibility with older builds
+      await AsyncStorage.setItem('notify_budget_alerts', v ? '1' : '0');
+    } catch {}
+  };
+
   const removeReceipt = async (id: number) => {
     const key = String(id);
     setReceipts(prev => {
@@ -367,7 +388,7 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
     }
   }, [username]);
 
-  const value = useMemo<AppState>(() => ({ baseUrl, setBaseUrl, username, setUsername, password, setPassword, deviceId, setDeviceId, pubB64, setPubB64, privB64, setPrivB64, pem, setPem, registered, setRegistered: markRegistered, authHeaders, fetchWithAuth, logout, setOnAuthFailure, save, dekWraps, setReceiptDekWrap, receipts, setReceiptData, removeReceipt, budgets, setBudget, outboxDeletes, queueDelete, dequeueDelete, accessToken, refreshToken, setTokens, hydrated }), [baseUrl, username, password, deviceId, pubB64, privB64, pem, registered, authHeaders, fetchWithAuth, logout, setOnAuthFailure, dekWraps, receipts, budgets, outboxDeletes, accessToken, refreshToken, hydrated]);
+  const value = useMemo<AppState>(() => ({ baseUrl, setBaseUrl, username, setUsername, password, setPassword, deviceId, setDeviceId, pubB64, setPubB64, privB64, setPrivB64, pem, setPem, registered, setRegistered: markRegistered, authHeaders, fetchWithAuth, logout, setOnAuthFailure, save, dekWraps, setReceiptDekWrap, receipts, setReceiptData, removeReceipt, budgets, setBudget, outboxDeletes, queueDelete, dequeueDelete, accessToken, refreshToken, setTokens, hydrated, budgetAlertsEnabled, setBudgetAlertsEnabled: markBudgetAlertsEnabled }), [baseUrl, username, password, deviceId, pubB64, privB64, pem, registered, authHeaders, fetchWithAuth, logout, setOnAuthFailure, dekWraps, receipts, budgets, outboxDeletes, accessToken, refreshToken, hydrated, budgetAlertsEnabled]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
