@@ -611,17 +611,71 @@ type BudgetsAndAlertsSectionProps = {
   onLayoutCapture: (y: number) => void;
 };
 function BudgetsAndAlertsSection({ byCategory, fullCategoryList, maxCategory, totalAll, budgets, setBudget, fmtAmount, overAlerts, budgetAlertsEnabled, navigation, onLayoutCapture }: Readonly<BudgetsAndAlertsSectionProps>) {
-  const countBudgets = Object.keys(budgets || {}).length;
+  const { pushToast } = useAppState() as any;
+  // Draft state for all categories
+  const [drafts, setDrafts] = useState<Record<string, string>>(() => {
+    const init: Record<string, string> = {};
+    for (const k of Object.keys(budgets || {})) init[k] = String(budgets[k]);
+    return init;
+  });
+  const [dirtySet, setDirtySet] = useState<Set<string>>(new Set());
+  // Keep drafts synced if budgets change externally for untouched fields
+  useEffect(() => {
+    setDrafts(prev => {
+      const next = { ...prev };
+      for (const k of Object.keys(budgets || {})) {
+        if (!dirtySet.has(k)) next[k] = String(budgets[k]);
+      }
+      // Remove deleted budgets if not dirty
+      for (const k of Object.keys(next)) {
+        if (!(k in budgets) && !dirtySet.has(k)) delete next[k];
+      }
+      return next;
+    });
+  }, [budgets, dirtySet]);
+
+  const onChangeDraft = (cat: string, txt: string) => {
+    setDrafts(d => ({ ...d, [cat]: txt }));
+    setDirtySet(s => new Set([...Array.from(s), cat]));
+  };
   const onClearAll = () => {
-    if (!countBudgets) return;
+    if (!Object.keys(budgets || {}).length) return;
     Alert.alert('Clear all budgets', 'Remove all category limits?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Clear', style: 'destructive', onPress: () => { for (const k of Object.keys(budgets || {})) setBudget(k, null); } }
+      { text: 'Clear', style: 'destructive', onPress: () => {
+        for (const k of Object.keys(budgets || {})) setBudget(k, null);
+        pushToast('All budgets cleared');
+        setDrafts({});
+        setDirtySet(new Set());
+      } }
     ]);
+  };
+  const onCancelAll = () => {
+    // Revert all dirty fields
+    const reverted: Record<string, string> = {};
+    for (const k of fullCategoryList) {
+      if (k in budgets) reverted[k] = String(budgets[k]);
+    }
+    setDrafts(reverted);
+    setDirtySet(new Set());
+  };
+  const onSaveAll = () => {
+    let changed = 0;
+    for (const cat of fullCategoryList) {
+      if (!dirtySet.has(cat)) continue;
+      const raw = drafts[cat]?.trim() || '';
+      if (!raw) { setBudget(cat, null); changed++; continue; }
+      const n = Number.parseFloat(raw);
+      if (Number.isNaN(n)) { continue; }
+      setBudget(cat, n); changed++;
+    }
+    setDirtySet(new Set());
+    if (changed) pushToast('Budgets saved'); else pushToast('No changes');
   };
   // Map for quick spend lookup
   const spendMap: Record<string, number> = {};
   for (const c of byCategory) spendMap[c.key] = c.value;
+  const anyDirty = dirtySet.size > 0;
   return (
     <View style={styles.section} onLayout={(e)=> onLayoutCapture(e.nativeEvent.layout.y)}>
       <View style={styles.sectionBox}>
@@ -632,9 +686,11 @@ function BudgetsAndAlertsSection({ byCategory, fullCategoryList, maxCategory, to
           </Pressable>
         </View>
         <View style={{ marginBottom: 8 }}>
-          <Pressable onPress={onClearAll} disabled={countBudgets === 0} style={[styles.pill, styles.pillInline, countBudgets === 0 && { opacity: 0.4 }]}>
-            <Text style={styles.pillText}>Clear All</Text>
-          </Pressable>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            <Pressable onPress={onClearAll} disabled={!Object.keys(budgets || {}).length} style={[styles.pill, styles.pillInline, !Object.keys(budgets || {}).length && { opacity: 0.4 }]}>
+              <Text style={styles.pillText}>Clear All</Text>
+            </Pressable>
+          </View>
           {overAlerts.length > 0 ? (
             <View style={{ marginTop: 8 }}>
               <Text style={[styles.alertText, { fontWeight: '600' }]}>Over Budget ({overAlerts.length}):</Text>
@@ -648,38 +704,45 @@ function BudgetsAndAlertsSection({ byCategory, fullCategoryList, maxCategory, to
         </View>
         {fullCategoryList.length === 0 ? <Text style={styles.empty}>No categories</Text> : fullCategoryList.map(cat => {
           const spend = spendMap[cat] || 0;
-            const limit = budgets[cat];
-            let color: string | undefined;
-            if (limit) {
-              const ratio = spend / limit;
-              if (ratio >= 1) color = '#ef4444'; else if (ratio >= 0.8) color = '#f59e0b'; else color = '#10b981';
-            }
-            return (
-              <View key={cat} style={[styles.row, { alignItems: 'center' }]}>
-                <Text style={styles.rowLabel} numberOfLines={1}>{cat}</Text>
-                <View style={styles.rowBarWrap}>
-                  <Bar pct={maxCategory ? (spend / maxCategory) * 100 : 0} color={color} />
-                </View>
-                <View style={{ width: 130 }}>
-                  <Text style={styles.rowVal}>{fmtAmount(spend)}{totalAll > 0 && spend > 0 ? ` (${((spend/totalAll)*100).toFixed(1)}%)` : ''}</Text>
-                  {limit ? <Text style={{ fontSize: 11, color: color || '#334' }}>{fmtAmount(limit)} limit</Text> : null}
-                </View>
-                <TextInput
-                  placeholder={limit ? 'Edit' : 'Set'}
-                  keyboardType="numeric"
-                  value={limit ? String(limit) : ''}
-                  onChangeText={(txt) => {
-                    const v = txt.trim();
-                    if (!v) { setBudget(cat, null); return; }
-                    const n = Number.parseFloat(v);
-                    if (Number.isNaN(n)) return;
-                    setBudget(cat, n);
-                  }}
-                  style={[styles.inputSmall, { backgroundColor: '#fff', borderWidth: StyleSheet.hairlineWidth, borderColor: '#cbd5e1', paddingHorizontal: 8, paddingVertical: 6, borderRadius: 6, minWidth: 70 }]}
-                />
+          const limit = budgets[cat];
+          let color: string | undefined;
+          if (limit) {
+            const ratio = spend / limit;
+            if (ratio >= 1) color = '#ef4444'; else if (ratio >= 0.8) color = '#f59e0b'; else color = '#10b981';
+          }
+          const draftVal = drafts[cat] ?? (limit ? String(limit) : '');
+          const isDirty = dirtySet.has(cat);
+          return (
+            <View key={cat} style={[styles.row, { alignItems: 'center' }]}>
+              <Text style={styles.rowLabel} numberOfLines={1}>{cat}</Text>
+              <View style={styles.rowBarWrap}>
+                <Bar pct={maxCategory ? (spend / maxCategory) * 100 : 0} color={color} />
               </View>
-            );
+              <View style={{ width: 130 }}>
+                <Text style={styles.rowVal}>{fmtAmount(spend)}{totalAll > 0 && spend > 0 ? ` (${((spend/totalAll)*100).toFixed(1)}%)` : ''}</Text>
+                {limit ? <Text style={{ fontSize: 11, color: color || '#334' }}>{fmtAmount(limit)} limit</Text> : null}
+              </View>
+              <TextInput
+                placeholder={limit ? 'Edit' : 'Set'}
+                keyboardType="numeric"
+                value={draftVal}
+                onChangeText={(txt) => onChangeDraft(cat, txt)}
+                style={[styles.inputSmall, { backgroundColor: '#fff', borderWidth: StyleSheet.hairlineWidth, borderColor: isDirty ? '#4f46e5' : '#cbd5e1', paddingHorizontal: 8, paddingVertical: 6, borderRadius: 6, minWidth: 70 }]}
+              />
+            </View>
+          );
         })}
+        {/* Global Save Button */}
+        <View style={{ marginTop: 12, flexDirection: 'row', justifyContent: 'flex-end', gap: 8 }}>
+          {anyDirty && (
+            <Pressable onPress={onCancelAll} style={[styles.pill, { backgroundColor: '#f43f5e' }]}> 
+              <Text style={[styles.pillText, { color: '#fff' }]}>Cancel Changes</Text>
+            </Pressable>
+          )}
+          <Pressable onPress={onSaveAll} disabled={!anyDirty} style={[styles.pill, { backgroundColor: anyDirty ? '#4f46e5' : '#94a3b8' }]}>
+            <Text style={[styles.pillText, { color: '#fff' }]}>Save Changes</Text>
+          </Pressable>
+        </View>
       </View>
     </View>
   );
@@ -1054,3 +1117,5 @@ function OverviewSection({ kpis, fmtAmount }: Readonly<{ kpis: Metric[]; fmtAmou
 }
 
 // (Deprecated) BudgetAlertsSection replaced by BudgetsAndAlertsSection
+
+// (Removed per-row buffered input; now using single form save at bottom)
