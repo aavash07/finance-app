@@ -167,7 +167,7 @@ function Section({ title, children }: Readonly<React.PropsWithChildren<{ title: 
 }
 
 export default function AnalyticsScreen({ navigation }: any) {
-  const { receipts, budgets, setBudget } = useAppState();
+  const { receipts, budgets, setBudget, analyticsTick } = useAppState() as any;
   const baseList = useMemo(() => Object.values(receipts || {}), [receipts]);
   // Independent month filter for category aggregation
   const [categoryMonth, setCategoryMonth] = useState<string>('ALL');
@@ -237,7 +237,7 @@ export default function AnalyticsScreen({ navigation }: any) {
 
   const filtered = useMemo(() => filterReceipts(baseList, {
     dateFilter, currencyFilter, q, minAmt, maxAmt, onlyWithItems, archivedMode, archivedIds
-  }), [baseList, dateFilter, currencyFilter, q, minAmt, maxAmt, onlyWithItems, archivedMode, archivedIds]);
+  }), [baseList, dateFilter, currencyFilter, q, minAmt, maxAmt, onlyWithItems, archivedMode, archivedIds, analyticsTick]);
 
   const { kpis, byMonth, byMerchant, byCurrency, byCategory, byCategoryBudget, csv, categoryTotalAll, categoryTotalThisMonth } = useMemo(() => {
     const totals: number[] = [];
@@ -357,12 +357,27 @@ export default function AnalyticsScreen({ navigation }: any) {
   }), [byCategoryBudget, budgets]);
   // Fire a local notification (if enabled) when alerts are present
   const notifiedRef = useRef<string>('');
+  const notifyLockRef = useRef<boolean>(false);
   useFocusEffect(useCallback(() => {
     const alertsSig = `${overAlerts.map(a => a.key).join('|')}|${overAlerts.length}`;
     const tryNotify = async () => {
+      if (notifyLockRef.current) return;
       if (!budgetAlertsEnabled) return;
       if (!overAlerts.length) { notifiedRef.current = ''; return; }
+      // Persisted cooldown (avoid duplicates across reloads)
+      try {
+        const now = Date.now();
+        const raw = await AsyncStorage.getItem('budget_alert_last_v2');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed?.sig === alertsSig && typeof parsed?.ts === 'number' && (now - parsed.ts) < 6 * 60 * 60 * 1000) {
+            notifiedRef.current = alertsSig;
+            return; // within 6h window, skip
+          }
+        }
+      } catch {}
       if (notifiedRef.current === alertsSig) return;
+      notifyLockRef.current = true;
       try {
         // Permissions (Android 13+ & iOS)
         const perm = await Notifications.getPermissionsAsync();
@@ -380,14 +395,16 @@ export default function AnalyticsScreen({ navigation }: any) {
           trigger: null,
         });
         notifiedRef.current = alertsSig;
+        try { await AsyncStorage.setItem('budget_alert_last_v2', JSON.stringify({ sig: alertsSig, ts: Date.now() })); } catch {}
       } catch (e) {
         // Fallback to Alert if scheduling fails
         try {
           const count = overAlerts.length;
           Alert.alert('Budget alert', count === 1 ? `${overAlerts[0].key} is over its budget` : `${count} categories are over budget`);
           notifiedRef.current = alertsSig;
+          try { await AsyncStorage.setItem('budget_alert_last_v2', JSON.stringify({ sig: alertsSig, ts: Date.now() })); } catch {}
         } catch {}
-      }
+      } finally { notifyLockRef.current = false; }
     };
     tryNotify();
   }, [overAlerts, budgetAlertsEnabled]));
@@ -481,7 +498,7 @@ export default function AnalyticsScreen({ navigation }: any) {
   const budgetsSectionYRef = useRef<number>(0);
   // Navigation header content (filters + alert pill)
   const HeaderRight = useCallback(() => (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingRight: 12 }}>
       <ActiveFiltersSummary
         dateFilter={dateFilter}
         currencyFilter={currencyFilter}

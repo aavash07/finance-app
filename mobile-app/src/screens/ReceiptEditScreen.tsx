@@ -11,7 +11,7 @@ interface Props extends NativeStackScreenProps<RootStackParamList, 'ReceiptEdit'
 
 export default function ReceiptEditScreen({ route, navigation }: Props) {
   const { id } = route.params;
-  const { baseUrl, authHeaders, receipts, setReceiptData } = useAppState();
+  const { baseUrl, authHeaders, receipts, setReceiptData, bumpAnalytics } = useAppState() as any;
   const cacheEntry = receipts[String(id)] || {} as any;
   const existing = cacheEntry.derived || cacheEntry.data;
   const [loaded, setLoaded] = useState(false);
@@ -120,6 +120,7 @@ export default function ReceiptEditScreen({ route, navigation }: Props) {
       // Fetch full, fresh detail to ensure cache 'data' reflects server state
       const fresh = await client.getReceipt(id, authHeaders);
       await setReceiptData(id, fresh, fresh);
+      try { bumpAnalytics?.(); } catch {}
       navigation.replace('ReceiptDetail', { id });
     } catch (e: any) {
       console.log('[ReceiptEdit] save error', e);
@@ -151,21 +152,11 @@ export default function ReceiptEditScreen({ route, navigation }: Props) {
       </View>
       <View style={{ marginBottom: 12 }}>
         <Text style={styles.fieldLabel}>Category</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryScroll}>
-          {CATEGORY_OPTIONS.map(cat => {
-            const active = cat === category;
-            return (
-              <Pressable
-                key={cat}
-                onPress={() => setCategory(cat)}
-                style={[styles.categoryChip, active && styles.categoryChipActive]}
-                accessibilityLabel={`Select category ${cat}`}
-              >
-                <Text style={[styles.categoryChipText, active && styles.categoryChipTextActive]}>{cat}</Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
+        <CategoryScroller
+          categories={CATEGORY_OPTIONS}
+          active={category}
+          onSelect={(cat) => setCategory(cat)}
+        />
       </View>
       <View style={styles.row}> 
         <TextInput style={[styles.input, styles.currency]} placeholder="Currency" value={currency} onChangeText={setCurrency} />
@@ -231,6 +222,59 @@ function LabeledField({ label, children }: LabeledFieldProps){
   );
 }
 
+// Horizontal scroller that auto-focuses the active category (mirrors ReceiptsScreen)
+function CategoryScroller({ categories, active, onSelect }: Readonly<{ categories: string[]; active: string; onSelect: (c: string) => void }>) {
+  const scrollRef = React.useRef<ScrollView|null>(null);
+  const posRef = React.useRef<Record<string, number>>({});
+  const containerWRef = React.useRef(0);
+  const contentWRef = React.useRef(0);
+  const scrolledRef = React.useRef(false);
+
+  const scrollToActive = React.useCallback(() => {
+    const x = posRef.current[active];
+    const containerW = containerWRef.current || 0;
+    const contentW = contentWRef.current || 0;
+    if (scrollRef.current && typeof x === 'number') {
+      const clampMax = Math.max(0, contentW - containerW);
+      const target = Math.max(0, Math.min(x - 24, clampMax));
+      try { scrollRef.current.scrollTo({ x: target, animated: true }); scrolledRef.current = true; } catch {}
+    }
+  }, [active]);
+
+  React.useEffect(() => {
+    const id = setTimeout(scrollToActive, 50);
+    return () => clearTimeout(id);
+  }, [active, scrollToActive]);
+
+  return (
+    <ScrollView
+      ref={scrollRef}
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.categoryScroll}
+      onLayout={(e) => { containerWRef.current = e.nativeEvent.layout.width; }}
+      onContentSizeChange={(w) => { contentWRef.current = w; if (!scrolledRef.current) scrollToActive(); }}
+    >
+      {categories.map((cat) => {
+        const isActive = cat === active;
+        return (
+          <Pressable
+            key={cat}
+            onPress={() => onSelect(cat)}
+            onLayout={(e) => {
+              posRef.current[cat] = e.nativeEvent.layout.x;
+              if (cat === active && !scrolledRef.current) scrollToActive();
+            }}
+            style={[styles.categoryChip, isActive && styles.categoryChipActive]}
+            accessibilityLabel={`Select category ${cat}`}
+          >
+            <Text style={[styles.categoryChipText, isActive && styles.categoryChipTextActive]}>{cat}</Text>
+          </Pressable>
+        );
+      })}
+    </ScrollView>
+  );
+}
 
 const styles = StyleSheet.create({
   c: { padding: 16 },

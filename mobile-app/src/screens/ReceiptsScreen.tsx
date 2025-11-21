@@ -7,6 +7,60 @@ import * as ImagePicker from 'expo-image-picker';
 import { FinanceKitClient, generateDEK, mintGrantJWT, rsaOaepWrapDek } from '@financekit/rn-sdk';
 import InlineCalendarPicker from '../components/InlineCalendarPicker';
 import { useAppState } from '../context/AppState';
+// Horizontal scroller that auto-focuses the active category
+function CategoryScroller({ categories, active, onSelect }: Readonly<{ categories: string[]; active: string; onSelect: (c: string) => void }>) {
+  const scrollRef = React.useRef<ScrollView|null>(null);
+  const posRef = React.useRef<Record<string, number>>({});
+  const containerWRef = React.useRef(0);
+  const contentWRef = React.useRef(0);
+  const scrolledRef = React.useRef(false);
+
+  const scrollToActive = React.useCallback(() => {
+    const x = posRef.current[active];
+    const containerW = containerWRef.current || 0;
+    const contentW = contentWRef.current || 0;
+    if (scrollRef.current && typeof x === 'number') {
+      const clampMax = Math.max(0, contentW - containerW);
+      const target = Math.max(0, Math.min(x - 24, clampMax));
+      try { scrollRef.current.scrollTo({ x: target, animated: true }); scrolledRef.current = true; } catch {}
+    }
+  }, [active]);
+
+  React.useEffect(() => {
+    // Attempt after mount/active change with a short delay so layouts settle
+    const id = setTimeout(scrollToActive, 50);
+    return () => clearTimeout(id);
+  }, [active, scrollToActive]);
+
+  return (
+    <ScrollView
+      ref={scrollRef}
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.categoryScroll}
+      onLayout={(e) => { containerWRef.current = e.nativeEvent.layout.width; }}
+      onContentSizeChange={(w) => { contentWRef.current = w; if (!scrolledRef.current) scrollToActive(); }}
+    >
+      {categories.map((cat) => {
+        const isActive = cat === active;
+        return (
+          <Pressable
+            key={cat}
+            onPress={() => onSelect(cat)}
+            onLayout={(e) => {
+              posRef.current[cat] = e.nativeEvent.layout.x;
+              if (cat === active && !scrolledRef.current) scrollToActive();
+            }}
+            style={[styles.categoryChip, isActive && styles.categoryChipActive]}
+            accessibilityLabel={`Select category ${cat}`}
+          >
+            <Text style={[styles.categoryChipText, isActive && styles.categoryChipTextActive]}>{cat}</Text>
+          </Pressable>
+        );
+      })}
+    </ScrollView>
+  );
+}
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 // Haptics (now installed) – static import for type safety
@@ -994,21 +1048,11 @@ export default function ReceiptsScreen() {
                           </View>
                           <View style={styles.fieldRow}>
                             <Text style={styles.fieldLabel}>Category</Text>
-                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryScroll}>
-                              {CATEGORY_OPTIONS.map(cat => {
-                                const active = cat === ingestEdit.category;
-                                return (
-                                  <Pressable
-                                    key={cat}
-                                    onPress={() => setIngestEdit(p => ({ ...p, category: cat }))}
-                                    style={[styles.categoryChip, active && styles.categoryChipActive]}
-                                    accessibilityLabel={`Select category ${cat}`}
-                                  >
-                                    <Text style={[styles.categoryChipText, active && styles.categoryChipTextActive]}>{cat}</Text>
-                                  </Pressable>
-                                );
-                              })}
-                            </ScrollView>
+                            <CategoryScroller
+                              categories={CATEGORY_OPTIONS}
+                              active={ingestEdit.category}
+                              onSelect={(cat) => setIngestEdit(p => ({ ...p, category: cat }))}
+                            />
                           </View>
                           <View style={styles.fieldInlineGroup}> 
                             <View style={{ flex: 1 }}>
