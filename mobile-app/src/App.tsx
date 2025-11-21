@@ -4,6 +4,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import Constants from 'expo-constants';
 import { AppStateProvider } from './context/AppState';
 import AppNavigator from './navigation/AppNavigator';
+import ToastHost from './components/ToastHost';
 import { useFonts } from 'expo-font';
 
 export default function App() {
@@ -16,6 +17,7 @@ export default function App() {
       <SafeAreaView style={styles.container}>
         <AppStateProvider>
           <AppNavigator />
+          <ToastHost />
         </AppStateProvider>
       </SafeAreaView>
     </GestureHandlerRootView>
