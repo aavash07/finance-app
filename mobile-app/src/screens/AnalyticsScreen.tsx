@@ -167,7 +167,7 @@ function Section({ title, children }: Readonly<React.PropsWithChildren<{ title: 
 }
 
 export default function AnalyticsScreen({ navigation }: any) {
-  const { receipts, budgets, setBudget, analyticsTick } = useAppState() as any;
+  const { receipts, budgets, setBudget, analyticsTick, pushToast } = useAppState() as any;
   const baseList = useMemo(() => Object.values(receipts || {}), [receipts]);
   // Independent month filter for category aggregation
   const [categoryMonth, setCategoryMonth] = useState<string>('ALL');
@@ -358,7 +358,7 @@ export default function AnalyticsScreen({ navigation }: any) {
   // Fire a local notification (if enabled) when alerts are present
   const notifiedRef = useRef<string>('');
   const notifyLockRef = useRef<boolean>(false);
-  useFocusEffect(useCallback(() => {
+  useEffect(() => {
     const alertsSig = `${overAlerts.map(a => a.key).join('|')}|${overAlerts.length}`;
     const tryNotify = async () => {
       if (notifyLockRef.current) return;
@@ -407,9 +407,8 @@ export default function AnalyticsScreen({ navigation }: any) {
       } finally { notifyLockRef.current = false; }
     };
     tryNotify();
-  }, [overAlerts, budgetAlertsEnabled]));
+  }, [overAlerts, budgetAlertsEnabled, analyticsTick]);
   const [budgetEditorExpanded] = useState(true); // legacy flag (always expanded now)
-  const [insightsModalOpen, setInsightsModalOpen] = useState(false);
 
   const fmtAmount = (n: number) => {
     try {
@@ -492,6 +491,16 @@ export default function AnalyticsScreen({ navigation }: any) {
       Alert.alert('Share failed', e?.message || 'Unknown error');
     }
   };
+  const onSaveCsv = async () => {
+    try {
+      const filename = `receipts-${Date.now()}.csv`;
+      const fileUri = (FileSystem.documentDirectory || FileSystem.cacheDirectory || '') + filename;
+      await FileSystem.writeAsStringAsync(fileUri, csv, { encoding: FileSystem.EncodingType.UTF8 });
+      pushToast?.(`Saved CSV to ${filename}`);
+    } catch (e: any) {
+      Alert.alert('Save failed', e?.message || 'Unknown error');
+    }
+  };
 
   // Scroll refs for header alert pill jump
   const scrollRef = useRef<ScrollView | null>(null);
@@ -569,33 +578,40 @@ export default function AnalyticsScreen({ navigation }: any) {
         onLayoutCapture={(y:number)=> { budgetsSectionYRef.current = y; }}
       />
 
+      <Section title="Insights">
+        {largestReceipt30d ? (
+          <Text>
+            Largest (last 30 days): {largestReceipt30d.merchant || 'Unknown'} — {fmtAmount(largestReceipt30d.total)} — {(() => { const d = new Date(largestReceipt30d.date); return Number.isNaN(d.getTime()) ? largestReceipt30d.date : new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: '2-digit' }).format(d); })()}
+          </Text>
+        ) : (
+          <Text>No purchases in the last 30 days</Text>
+        )}
+        <Text>
+          Top category ({new Date().toLocaleString(undefined, { month: 'long', year: 'numeric' })}): {topCatThisMonth ? topCatThisMonth[0] : 'n/a'} {topCatThisMonth ? `— ${fmtAmount(topCatThisMonth[1])}` : ''}
+        </Text>
+        <Text>
+          Latest MoM change: {latestMoM >= 0 ? '+' : ''}{latestMoM.toFixed(1)}%
+        </Text>
+      </Section>
+
       <Section title="Export">
-        <Pressable onPress={() => setShowCsv(v => !v)} style={[styles.pill, styles.pillInline]}>
-          <Text style={styles.pillText}>{showCsv ? 'Hide CSV' : 'Show CSV'}</Text>
-        </Pressable>
-        <Pressable onPress={onShareCsv} style={[styles.pill, styles.pillInline]}>
-          <Text style={styles.pillText}>Share CSV</Text>
-        </Pressable>
+        <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+          <Pressable onPress={() => setShowCsv(v => !v)} style={[styles.pill, styles.pillInline]}>
+            <Text style={styles.pillText}>{showCsv ? 'Hide CSV' : 'Show CSV'}</Text>
+          </Pressable>
+          <Pressable onPress={onSaveCsv} style={[styles.pill, styles.pillInline]}>
+            <Text style={styles.pillText}>Save CSV</Text>
+          </Pressable>
+          <Pressable onPress={onShareCsv} style={[styles.pill, styles.pillInline]}>
+            <Text style={styles.pillText}>Share CSV</Text>
+          </Pressable>
+        </View>
         {showCsv ? (
           <View style={styles.csvBox}>
             <Text selectable style={styles.csvText}>{csv}</Text>
           </View>
         ) : null}
       </Section>
-
-          <Section title="Insights">
-            <Pressable onPress={() => setInsightsModalOpen(true)} style={styles.collapseHeader}>
-              <Text style={styles.collapseText}>View insights</Text>
-            </Pressable>
-          </Section>
-          <InsightsModal
-            visible={insightsModalOpen}
-            onClose={() => setInsightsModalOpen(false)}
-            largestReceipt30d={largestReceipt30d}
-            topCatThisMonth={topCatThisMonth}
-            latestMoM={latestMoM}
-            fmtAmount={fmtAmount}
-          />
       </ScrollView>
       {/* Floating Filters Action Button */}
       <Pressable accessibilityRole="button" accessibilityLabel="Open filters" onPress={() => setFiltersModalOpen(true)} style={styles.filtersFab}>
@@ -833,60 +849,7 @@ function BudgetsAndAlertsSection({ byCategory, fullCategoryList, maxCategory, to
   );
 }
 
-type InsightsModalProps = {
-  visible: boolean;
-  onClose: () => void;
-  largestReceipt30d: { date: string; merchant: string; total: number } | null;
-  topCatThisMonth?: [string, number];
-  latestMoM: number;
-  fmtAmount: (n: number) => string;
-};
-
-function InsightsModal({ visible, onClose, largestReceipt30d, topCatThisMonth, latestMoM, fmtAmount }: Readonly<InsightsModalProps>) {
-  const formatDate = (s: string) => {
-    const d = new Date(s);
-    if (Number.isNaN(d.getTime())) return s;
-    try {
-      return new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: '2-digit' }).format(d);
-    } catch {
-      return d.toDateString();
-    }
-  };
-  const now = new Date();
-  const monthName = now.toLocaleString(undefined, { month: 'long' });
-  const monthLabel = `${monthName} ${now.getFullYear()}`;
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <TouchableWithoutFeedback onPress={onClose}>
-        <View style={styles.modalBackdrop}>
-          <TouchableWithoutFeedback>
-            <SafeAreaView style={styles.modalSheet}>
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Insights</Text>
-                <Pressable onPress={onClose}><Text style={styles.modalClose}>Close</Text></Pressable>
-              </View>
-              <ScrollView contentContainerStyle={styles.modalBody}>
-                {largestReceipt30d ? (
-                  <Text>
-                    Largest (last 30 days): {largestReceipt30d.merchant || 'Unknown'} — {fmtAmount(largestReceipt30d.total)} — {formatDate(largestReceipt30d.date)}
-                  </Text>
-                ) : (
-                  <Text>No purchases in the last 30 days</Text>
-                )}
-                <Text>
-                  Top category ({monthLabel}): {topCatThisMonth ? topCatThisMonth[0] : 'n/a'} {topCatThisMonth ? `— ${fmtAmount(topCatThisMonth[1])}` : ''}
-                </Text>
-                <Text>
-                  Latest MoM change: {latestMoM >= 0 ? '+' : ''}{latestMoM.toFixed(1)}%
-                </Text>
-              </ScrollView>
-            </SafeAreaView>
-          </TouchableWithoutFeedback>
-        </View>
-      </TouchableWithoutFeedback>
-    </Modal>
-  );
-}
+// Insights modal removed – insights are rendered inline above.
 
 // Simple keyword-based categorization
 const CATEGORY_KEYWORDS: { key: string; keywords: string[] }[] = [
