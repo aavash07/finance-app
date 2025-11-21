@@ -355,14 +355,36 @@ export default function AnalyticsScreen({ navigation }: any) {
     const limit = budgets?.[key];
     return typeof limit === 'number' && c.value >= limit;
   }), [byCategoryBudget, budgets]);
-  // Simplified: fire notification whenever alert counter changes (increase or decrease) and >0
-  const prevAlertCountRef = useRef<number>(overAlerts.length);
+  // Fire notification only when a category newly crosses its budget (transition from below limit to >= limit).
+  const prevOverStateRef = useRef<Record<string, { over: boolean; spend: number; limit: number }>>({});
   useEffect(() => {
-    const currentCount = overAlerts.length;
-    if (!budgetAlertsEnabled) { prevAlertCountRef.current = currentCount; return; }
-    if (currentCount <= 0) { prevAlertCountRef.current = currentCount; return; }
-    if (currentCount === prevAlertCountRef.current) return; // no change
-    prevAlertCountRef.current = currentCount;
+    if (!budgetAlertsEnabled) return;
+    // Build current state map
+    const curr: Record<string, { over: boolean; spend: number; limit: number }> = {};
+    for (const entry of byCategoryBudget) {
+      const cat = entry.key;
+      const limit = typeof budgets?.[cat] === 'number' ? budgets[cat] : NaN;
+      if (!Number.isFinite(limit)) continue;
+      const spend = entry.value;
+      curr[cat] = { over: spend >= limit, spend, limit };
+    }
+    // Detect newly crossed categories (were not over before, now over) OR re-cross after budget change.
+    const newlyCrossed: string[] = [];
+    for (const [cat, st] of Object.entries(curr)) {
+      const prev = prevOverStateRef.current[cat];
+      if (!prev) {
+        if (st.over) newlyCrossed.push(cat);
+      } else {
+        // Previously under and now over OR limit decreased making it over.
+        if (!prev.over && st.over) newlyCrossed.push(cat);
+        // If previously over but limit lowered further so spend/limit ratio increased by >=10%, treat as re-cross.
+        else if (prev.over && st.over && prev.limit > st.limit && (st.spend / st.limit) / (prev.spend / prev.limit) >= 1.10) {
+          newlyCrossed.push(cat);
+        }
+      }
+    }
+    prevOverStateRef.current = curr;
+    if (!newlyCrossed.length) return;
     (async () => {
       try {
         const perm = await Notifications.getPermissionsAsync();
@@ -373,21 +395,21 @@ export default function AnalyticsScreen({ navigation }: any) {
             return;
           }
         }
-        const count = currentCount;
+        const count = newlyCrossed.length;
         await Notifications.scheduleNotificationAsync({
           content: {
             title: 'Budget Alert',
-            body: count === 1 ? `${overAlerts[0].key} is over its budget` : `${count} categories are over budget`,
+            body: count === 1 ? `${newlyCrossed[0]} just crossed its budget` : `${count} categories just crossed their budgets`,
             sound: 'default',
           },
           trigger: null,
         });
       } catch (e) {
-        const count = currentCount;
-        Alert.alert('Budget alert', count === 1 ? `${overAlerts[0].key} is over its budget` : `${count} categories are over budget`);
+        const count = newlyCrossed.length;
+        Alert.alert('Budget alert', count === 1 ? `${newlyCrossed[0]} just crossed its budget` : `${count} categories just crossed their budgets`);
       }
     })();
-  }, [overAlerts.length, budgetAlertsEnabled, overAlerts, pushToast]);
+  }, [byCategoryBudget, budgets, budgetAlertsEnabled, pushToast]);
   const [budgetEditorExpanded] = useState(true); // legacy flag (always expanded now)
 
   const fmtAmount = (n: number) => {
