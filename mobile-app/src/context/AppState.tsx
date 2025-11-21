@@ -408,6 +408,7 @@ export function AppStateProvider({ children }: Readonly<{ children: React.ReactN
   }, [username]);
 
   const value = useMemo<AppState>(() => ({ baseUrl, setBaseUrl, username, setUsername, password, setPassword, deviceId, setDeviceId, pubB64, setPubB64, privB64, setPrivB64, pem, setPem, registered, setRegistered: markRegistered, authHeaders, fetchWithAuth, logout, setOnAuthFailure, save, dekWraps, setReceiptDekWrap, receipts, setReceiptData, removeReceipt, budgets, setBudget, outboxDeletes, queueDelete, dequeueDelete, accessToken, refreshToken, setTokens, hydrated, budgetAlertsEnabled, setBudgetAlertsEnabled: markBudgetAlertsEnabled, toastQueue, pushToast, analyticsTick, bumpAnalytics: () => setAnalyticsTick(t => t + 1) }), [baseUrl, username, password, deviceId, pubB64, privB64, pem, registered, authHeaders, fetchWithAuth, logout, setOnAuthFailure, dekWraps, receipts, budgets, outboxDeletes, accessToken, refreshToken, hydrated, budgetAlertsEnabled, toastQueue, analyticsTick]);
+
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

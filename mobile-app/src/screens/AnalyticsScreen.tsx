@@ -233,7 +233,7 @@ export default function AnalyticsScreen({ navigation }: any) {
     })();
   }, []);
   // Global preference moved to Account screen (context)
-  const { budgetAlertsEnabled, setBudgetAlertsEnabled } = useAppState() as any;
+  const { budgetAlertsEnabled } = useAppState() as any;
 
   const filtered = useMemo(() => filterReceipts(baseList, {
     dateFilter, currencyFilter, q, minAmt, maxAmt, onlyWithItems, archivedMode, archivedIds
@@ -355,37 +355,25 @@ export default function AnalyticsScreen({ navigation }: any) {
     const limit = budgets?.[key];
     return typeof limit === 'number' && c.value >= limit;
   }), [byCategoryBudget, budgets]);
-  // Fire a local notification (if enabled) when alerts are present
-  const notifiedRef = useRef<string>('');
-  const notifyLockRef = useRef<boolean>(false);
+  // Simplified: fire notification whenever alert counter changes (increase or decrease) and >0
+  const prevAlertCountRef = useRef<number>(overAlerts.length);
   useEffect(() => {
-    const alertsSig = `${overAlerts.map(a => a.key).join('|')}|${overAlerts.length}`;
-    const tryNotify = async () => {
-      if (notifyLockRef.current) return;
-      if (!budgetAlertsEnabled) return;
-      if (!overAlerts.length) { notifiedRef.current = ''; return; }
-      // Persisted cooldown (avoid duplicates across reloads)
+    const currentCount = overAlerts.length;
+    if (!budgetAlertsEnabled) { prevAlertCountRef.current = currentCount; return; }
+    if (currentCount <= 0) { prevAlertCountRef.current = currentCount; return; }
+    if (currentCount === prevAlertCountRef.current) return; // no change
+    prevAlertCountRef.current = currentCount;
+    (async () => {
       try {
-        const now = Date.now();
-        const raw = await AsyncStorage.getItem('budget_alert_last_v2');
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (parsed?.sig === alertsSig && typeof parsed?.ts === 'number' && (now - parsed.ts) < 6 * 60 * 60 * 1000) {
-            notifiedRef.current = alertsSig;
-            return; // within 6h window, skip
-          }
-        }
-      } catch {}
-      if (notifiedRef.current === alertsSig) return;
-      notifyLockRef.current = true;
-      try {
-        // Permissions (Android 13+ & iOS)
         const perm = await Notifications.getPermissionsAsync();
         if (perm.status !== 'granted') {
           const req = await Notifications.requestPermissionsAsync();
-          if (req.status !== 'granted') return;
+          if (req.status !== 'granted') {
+            pushToast?.('Budget alerts permission denied');
+            return;
+          }
         }
-        const count = overAlerts.length;
+        const count = currentCount;
         await Notifications.scheduleNotificationAsync({
           content: {
             title: 'Budget Alert',
@@ -394,20 +382,12 @@ export default function AnalyticsScreen({ navigation }: any) {
           },
           trigger: null,
         });
-        notifiedRef.current = alertsSig;
-        try { await AsyncStorage.setItem('budget_alert_last_v2', JSON.stringify({ sig: alertsSig, ts: Date.now() })); } catch {}
       } catch (e) {
-        // Fallback to Alert if scheduling fails
-        try {
-          const count = overAlerts.length;
-          Alert.alert('Budget alert', count === 1 ? `${overAlerts[0].key} is over its budget` : `${count} categories are over budget`);
-          notifiedRef.current = alertsSig;
-          try { await AsyncStorage.setItem('budget_alert_last_v2', JSON.stringify({ sig: alertsSig, ts: Date.now() })); } catch {}
-        } catch {}
-      } finally { notifyLockRef.current = false; }
-    };
-    tryNotify();
-  }, [overAlerts, budgetAlertsEnabled, analyticsTick]);
+        const count = currentCount;
+        Alert.alert('Budget alert', count === 1 ? `${overAlerts[0].key} is over its budget` : `${count} categories are over budget`);
+      }
+    })();
+  }, [overAlerts.length, budgetAlertsEnabled, overAlerts, pushToast]);
   const [budgetEditorExpanded] = useState(true); // legacy flag (always expanded now)
 
   const fmtAmount = (n: number) => {
@@ -574,7 +554,6 @@ export default function AnalyticsScreen({ navigation }: any) {
         overAlerts={overAlerts}
         budgetAlertsEnabled={budgetAlertsEnabled}
         navigation={navigation}
-        setBudgetAlertsEnabled={setBudgetAlertsEnabled}
         onLayoutCapture={(y:number)=> { budgetsSectionYRef.current = y; }}
       />
 
