@@ -268,6 +268,18 @@ export default function ReceiptsScreen() {
   // Items no longer carry per-line category (simplified classification to receipt-level only)
   const [ingestItems, setIngestItems] = useState<{ id?: number; desc: string; qty: string; price: string }[]>([]);
   const fetchedItemsRef = useRef(false);
+  // Reset items & expanded state when switching to a different receipt (prevent stale carry-over)
+  const prevIngestIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    const currentId = ingestConfirm?.id ?? null;
+    if (currentId !== prevIngestIdRef.current) {
+      // New receipt opened: clear previous inline items and collapse breakdown
+      setIngestItems([]);
+      fetchedItemsRef.current = false;
+      setExpandFull(false);
+    }
+    prevIngestIdRef.current = currentId;
+  }, [ingestConfirm?.id]);
   // Determine if native picker is safely available (avoid RNCMaterialDatePicker crash on some Expo Android builds)
   // Force JS calendar path (no native dependency)
   useEffect(() => {
